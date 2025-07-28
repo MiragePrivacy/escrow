@@ -3,11 +3,7 @@ pragma solidity ^0.8.13;
 
 interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    ) external returns (bool);
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
     function balanceOf(address account) external view returns (uint256);
 }
 
@@ -34,21 +30,14 @@ contract Escrow {
     }
 
     // takes currentRewardAmount + currentPaymentAmount from the deployer's balance from the tokenContract.
-    function fund(
-        uint _currentRewardAmount,
-        uint _currentPaymentAmount
-    ) public {
+    function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) public {
         require(msg.sender == deployerAddress, "Only callable by the deployer");
         require(!funded, "Contract already funded");
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
         currentPaymentAmount = _currentPaymentAmount;
-        IERC20(tokenContract).transferFrom(
-            msg.sender,
-            address(this),
-            originalRewardAmount + currentPaymentAmount
-        );
+        IERC20(tokenContract).transferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount);
         funded = true;
     }
 
@@ -56,10 +45,7 @@ contract Escrow {
     function bond(uint256 _bondAmount) public {
         require(funded, "Contract not funded");
         require(!cancellationRequest, "Cancellation requested");
-        require(
-            _bondAmount >= currentRewardAmount / 2,
-            "Bond must be at least half of reward amount"
-        );
+        require(_bondAmount >= currentRewardAmount / 2, "Bond must be at least half of reward amount");
 
         // If deadline passed and someone is bonded, add their bond to reward
         if (executionDeadline > 0 && block.timestamp > executionDeadline) {
@@ -68,11 +54,7 @@ contract Escrow {
             tryResetBondData();
         }
 
-        IERC20(tokenContract).transferFrom(
-            msg.sender,
-            address(this),
-            _bondAmount
-        );
+        IERC20(tokenContract).transferFrom(msg.sender, address(this), _bondAmount);
 
         bondedExecutor = msg.sender;
         executionDeadline = block.timestamp + 5 minutes;
@@ -96,14 +78,9 @@ contract Escrow {
     // ignore the proof for now, it's a placeholder, mark it as such. releases the bondAmount + currentRewardAmount + pyamnetAmount to the caller only and only if the caller is bondedExecutor
     function collect() public {
         require(funded, "Contract not funded");
-        require(
-            msg.sender == bondedExecutor && is_bonded(),
-            "Only bonded executor can collect"
-        );
+        require(msg.sender == bondedExecutor && is_bonded(), "Only bonded executor can collect");
 
-        uint256 payout = bondAmount +
-            currentRewardAmount +
-            currentPaymentAmount;
+        uint256 payout = bondAmount + currentRewardAmount + currentPaymentAmount;
         address executor = bondedExecutor;
 
         bondedExecutor = address(0);
@@ -125,14 +102,10 @@ contract Escrow {
     function withdraw() public {
         require(funded, "Contract not funded");
         require(msg.sender == deployerAddress, "Only callable by the deployer");
-        require(
-            funded == true,
-            "The contract was not funded or has been drained already"
-        );
+        require(funded == true, "The contract was not funded or has been drained already");
         tryResetBondData();
 
-        uint256 withdrawableAmount = currentPaymentAmount +
-            originalRewardAmount;
+        uint256 withdrawableAmount = currentPaymentAmount + originalRewardAmount;
 
         funded = false;
         currentPaymentAmount = 0;
