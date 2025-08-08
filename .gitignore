@@ -1,5 +1,6 @@
 # Compiler files
 cache/
+!out/Escrow.sol/Escrow.json
 out/
 
 # Ignores development broadcast logs
