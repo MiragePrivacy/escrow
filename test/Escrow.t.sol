@@ -53,7 +53,7 @@ contract EscrowTest is Test {
 
         vm.startPrank(deployer);
         token = new MockERC20();
-        escrow = new Escrow(address(token), TASK_ID);  // Fixed: Added taskId parameter
+        escrow = new Escrow(address(token), TASK_ID); // Fixed: Added taskId parameter
         vm.stopPrank();
 
         token.mint(deployer, 10000e18);
@@ -65,7 +65,7 @@ contract EscrowTest is Test {
         assertEq(escrow.currentRewardAmount(), 0);
         assertEq(escrow.currentPaymentAmount(), 0);
         assertEq(escrow.funded(), false);
-        assertEq(escrow.taskId(), TASK_ID);  // Test taskId is set correctly
+        assertEq(escrow.taskId(), TASK_ID); // Test taskId is set correctly
     }
 
     function testFund() public {

@@ -26,12 +26,12 @@ library ReceiptValidator {
         address expectedExecutor
     ) internal pure returns (bool) {
         uint256 offset = 0;
-        
+
         // Handle typed receipts (EIP-2718)
         if (receiptRlp.length > 0 && uint8(receiptRlp[0]) < 0x80) {
             offset += 1; // Skip typed receipt prefix
         }
-        
+
         // Skip RLP list prefix
         require(uint8(receiptRlp[offset]) >= 0xc0, "Invalid receipt RLP");
         if (uint8(receiptRlp[offset]) >= 0xf8) {
@@ -39,12 +39,12 @@ library ReceiptValidator {
         } else {
             offset += 1;
         }
-        
+
         // Skip status, cumulativeGasUsed, bloom to get to logs
         for (uint256 i = 0; i < 3; i++) {
             offset = receiptRlp.skipItem(offset);
         }
-        
+
         // Now at logs array
         require(uint8(receiptRlp[offset]) >= 0xc0, "Invalid logs RLP");
         if (uint8(receiptRlp[offset]) >= 0xf8) {
@@ -52,12 +52,12 @@ library ReceiptValidator {
         } else {
             offset += 1;
         }
-        
+
         // Navigate to target log
         for (uint256 i = 0; i < logIndex; i++) {
             offset = receiptRlp.skipItem(offset);
         }
-        
+
         // Validate the target log
         return validateTaskCompletedLog(receiptRlp, offset, taskId, expectedExecutor);
     }
@@ -77,7 +77,7 @@ library ReceiptValidator {
         address expectedExecutor
     ) private pure returns (bool) {
         uint256 offset = logOffset;
-        
+
         // Parse target log: [address, topics[], data]
         require(uint8(receiptRlp[offset]) >= 0xc0, "Invalid log RLP");
         if (uint8(receiptRlp[offset]) >= 0xf8) {
@@ -85,11 +85,11 @@ library ReceiptValidator {
         } else {
             offset += 1;
         }
-        
+
         // Parse emitter address
         (bytes memory addrBytes, uint256 addrLen) = parseAddressFromRLP(receiptRlp, offset);
         require(addrBytes.length == 20, "Invalid emitter address length");
-        
+
         // Extract emitter address
         address emitter;
         assembly {
@@ -97,7 +97,7 @@ library ReceiptValidator {
         }
         // NOTE: Add emitter validation here if needed: require(emitter == expectedEmitter, "Wrong emitter");
         offset += addrLen;
-        
+
         // Parse and validate topics
         return validateEventTopics(receiptRlp, offset, taskId, expectedExecutor);
     }
@@ -109,13 +109,15 @@ library ReceiptValidator {
      * @return result Parsed address bytes
      * @return length Length consumed
      */
-    function parseAddressFromRLP(bytes calldata data, uint256 offset) 
-        private pure returns (bytes memory result, uint256 length) 
+    function parseAddressFromRLP(bytes calldata data, uint256 offset)
+        private
+        pure
+        returns (bytes memory result, uint256 length)
     {
         require(offset < data.length, "RLP offset out of bounds");
-        
+
         uint8 prefix = uint8(data[offset]);
-        
+
         if (prefix == 0x94) {
             // Address is 20 bytes with prefix 0x94
             result = new bytes(20);
@@ -143,7 +145,7 @@ library ReceiptValidator {
         address expectedExecutor
     ) private pure returns (bool) {
         uint256 offset = topicsOffset;
-        
+
         // Parse topics array
         require(uint8(receiptRlp[offset]) >= 0xc0, "Invalid topics RLP");
         if (uint8(receiptRlp[offset]) >= 0xf8) {
@@ -151,27 +153,27 @@ library ReceiptValidator {
         } else {
             offset += 1;
         }
-        
+
         // Check first topic (event signature)
         bytes32 eventSig = receiptRlp.extractBytes32(offset);
         bytes32 expectedSig = keccak256("TaskCompleted(bytes32,address,bytes32,uint256)");
         require(eventSig == expectedSig, "Wrong event signature");
-        
+
         // Check second topic (task ID)
         offset = receiptRlp.skipItem(offset);
         bytes32 logTaskId = receiptRlp.extractBytes32(offset);
         require(logTaskId == taskId, "Task ID mismatch");
-        
+
         // Check third topic (executor)
         offset = receiptRlp.skipItem(offset);
         bytes32 logExecutor = receiptRlp.extractBytes32(offset);
         require(address(uint160(uint256(logExecutor))) == expectedExecutor, "Executor mismatch");
-        
+
         // Parse and validate data payload (optional)
         offset = receiptRlp.skipItem(topicsOffset); // Skip entire topics array
         (bytes memory dataBytes,) = parseDataFromRLP(receiptRlp, offset);
         // NOTE: Add data validation here if needed
-        
+
         return true;
     }
 
@@ -183,12 +185,14 @@ library ReceiptValidator {
      * @return length Length consumed
      */
     function parseDataFromRLP(bytes calldata data, uint256 offset)
-        private pure returns (bytes memory result, uint256 length)
+        private
+        pure
+        returns (bytes memory result, uint256 length)
     {
         require(offset < data.length, "RLP offset out of bounds");
-        
+
         uint8 prefix = uint8(data[offset]);
-        
+
         if (prefix < 0x80) {
             // Single byte
             result = new bytes(1);

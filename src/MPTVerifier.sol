@@ -29,7 +29,7 @@ library MPTVerifier {
         bytes memory key = receiptPath;
         // Value is EXACT receipt bytes
         bytes memory value = receiptRlp;
-        
+
         // Verify MPT proof
         return verifyProof(key, value, proofNodes, receiptsRoot);
     }
@@ -42,26 +42,25 @@ library MPTVerifier {
      * @param root Root hash of the trie
      * @return True if the proof is valid
      */
-    function verifyProof(
-        bytes memory key,
-        bytes memory value,
-        bytes calldata proof,
-        bytes32 root
-    ) internal pure returns (bool) {
+    function verifyProof(bytes memory key, bytes memory value, bytes calldata proof, bytes32 root)
+        internal
+        pure
+        returns (bool)
+    {
         bytes32 currentHash = root;
         uint256 proofOffset = 0;
         uint256 keyOffset = 0;
-        
+
         while (proofOffset < proof.length && keyOffset < key.length * 2) {
             // Parse next node from proof
             (bytes memory node, uint256 nodeLength) = proof.parseItem(proofOffset);
             proofOffset += nodeLength;
-            
+
             // Verify current hash matches this node
             if (keccak256(node) != currentHash) {
                 return false;
             }
-            
+
             // Decode node to determine type
             uint256 nodeOffset = 0;
             if (node[0] >= 0xc0) {
@@ -70,28 +69,28 @@ library MPTVerifier {
                 if (node[0] >= 0xf8) {
                     nodeOffset += uint8(node[0]) - 0xf7;
                 }
-                
+
                 // Count list elements to classify node type
                 uint256 items = countListItems(node, nodeOffset);
-                
+
                 if (items == 17) {
                     // Branch node
-                    (bool success, uint256 newKeyOffset, bytes32 newHash) = 
+                    (bool success, uint256 newKeyOffset, bytes32 newHash) =
                         processBranchNode(node, nodeOffset, key, keyOffset, value);
-                    
+
                     if (!success) return false;
                     if (newHash == bytes32(0)) return true; // Found value
-                    
+
                     keyOffset = newKeyOffset;
                     currentHash = newHash;
                 } else if (items == 2) {
                     // Leaf or Extension node
-                    (bool success, uint256 newKeyOffset, bytes32 newHash) = 
+                    (bool success, uint256 newKeyOffset, bytes32 newHash) =
                         processLeafOrExtensionNode(node, nodeOffset, key, keyOffset, value);
-                    
+
                     if (!success) return false;
                     if (newHash == bytes32(0)) return true; // Found value
-                    
+
                     keyOffset = newKeyOffset;
                     currentHash = newHash;
                 } else {
@@ -101,7 +100,7 @@ library MPTVerifier {
                 return false; // Invalid node
             }
         }
-        
+
         return false;
     }
 
@@ -152,7 +151,7 @@ library MPTVerifier {
                 return (false, 0, bytes32(0));
             }
         }
-        
+
         // Navigate to next branch
         uint8 nibble = uint8(key[keyOffset / 2]);
         if (keyOffset % 2 == 0) {
@@ -160,18 +159,18 @@ library MPTVerifier {
         } else {
             nibble = nibble & 0x0f;
         }
-        
+
         // Get the branch at this nibble
         uint256 branchOffset = nodeOffset;
         for (uint256 i = 0; i < nibble; i++) {
             branchOffset += node.getItemLength(branchOffset);
         }
-        
+
         (bytes memory nextHash,) = node.parseItem(branchOffset);
         if (nextHash.length == 0) {
             return (false, 0, bytes32(0)); // Empty branch
         }
-        
+
         bytes32 hash;
         if (nextHash.length == 32) {
             assembly {
@@ -180,7 +179,7 @@ library MPTVerifier {
         } else {
             hash = keccak256(nextHash);
         }
-        
+
         return (true, keyOffset + 1, hash);
     }
 
@@ -205,7 +204,7 @@ library MPTVerifier {
         (bytes memory keyEnc, uint256 keyEncLen) = node.parseItem(nodeOffset);
         bool isLeaf = (uint8(keyEnc[0]) & 0x20) != 0; // HP flag
         bytes memory nodeKey = extractKeyFromNode(keyEnc);
-        
+
         if (isLeaf) {
             // Leaf node
             if (keyOffset + nodeKey.length == key.length * 2) {
@@ -222,7 +221,7 @@ library MPTVerifier {
             if (!compareKeys(key, keyOffset, nodeKey)) {
                 return (false, 0, bytes32(0));
             }
-            
+
             // Get next hash
             (bytes memory nextRef,) = node.parseItem(nodeOffset + keyEncLen);
             bytes32 hash;
@@ -233,7 +232,7 @@ library MPTVerifier {
             } else {
                 hash = keccak256(nextRef);
             }
-            
+
             return (true, keyOffset + nodeKey.length, hash);
         }
     }
@@ -245,10 +244,10 @@ library MPTVerifier {
      */
     function extractKeyFromNode(bytes memory nodeKey) private pure returns (bytes memory) {
         if (nodeKey.length == 0) return nodeKey;
-        
+
         uint8 firstByte = uint8(nodeKey[0]);
         bool isOdd = (firstByte & 0x10) != 0;
-        
+
         bytes memory result;
         if (isOdd) {
             result = new bytes(nodeKey.length * 2 - 1);
@@ -264,7 +263,7 @@ library MPTVerifier {
                 result[(i - 1) * 2 + 1] = bytes1(uint8(nodeKey[i]) & 0x0f);
             }
         }
-        
+
         return result;
     }
 
@@ -277,7 +276,7 @@ library MPTVerifier {
      */
     function compareKeys(bytes memory key, uint256 offset, bytes memory nodeKey) private pure returns (bool) {
         if (offset + nodeKey.length > key.length * 2) return false;
-        
+
         for (uint256 i = 0; i < nodeKey.length; i++) {
             uint8 keyNibble;
             if ((offset + i) % 2 == 0) {
@@ -285,12 +284,12 @@ library MPTVerifier {
             } else {
                 keyNibble = uint8(key[(offset + i) / 2]) & 0x0f;
             }
-            
+
             if (keyNibble != uint8(nodeKey[i])) {
                 return false;
             }
         }
-        
+
         return true;
     }
 }

@@ -15,9 +15,9 @@ library RLPParser {
      */
     function skipItem(bytes calldata data, uint256 offset) internal pure returns (uint256) {
         require(offset < data.length, "RLP offset out of bounds");
-        
+
         uint8 prefix = uint8(data[offset]);
-        
+
         if (prefix < 0x80) {
             // Single byte
             return offset + 1;
@@ -55,9 +55,9 @@ library RLPParser {
      */
     function parseItem(bytes memory data, uint256 offset) internal pure returns (bytes memory, uint256) {
         require(offset < data.length, "RLP offset out of bounds");
-        
+
         uint8 prefix = uint8(data[offset]);
-        
+
         if (prefix < 0x80) {
             // Single byte
             bytes memory result = new bytes(1);
@@ -102,9 +102,9 @@ library RLPParser {
      */
     function getItemLength(bytes memory data, uint256 offset) internal pure returns (uint256) {
         require(offset < data.length, "RLP offset out of bounds");
-        
+
         uint8 prefix = uint8(data[offset]);
-        
+
         if (prefix < 0x80) {
             return 1;
         } else if (prefix < 0xb8) {

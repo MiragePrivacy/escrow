@@ -35,11 +35,11 @@ contract Escrow {
     // Based on Nomad's ProofBlob structure
     // https://github.com/MiragePrivacy/Nomad/blob/HEAD/crates/ethereum/src/proof.rs#L24-L35
     struct ReceiptProof {
-        bytes blockHeader;      // RLP-encoded block header
-        bytes receiptRlp;       // RLP-encoded target receipt  
-        bytes proofNodes;       // Serialized MPT proof nodes
-        bytes receiptPath;      // RLP-encoded receipt index
-        uint256 logIndex;       // Index of target log in receipt
+        bytes blockHeader; // RLP-encoded block header
+        bytes receiptRlp; // RLP-encoded target receipt
+        bytes proofNodes; // Serialized MPT proof nodes
+        bytes receiptPath; // RLP-encoded receipt index
+        uint256 logIndex; // Index of target log in receipt
     }
 
     constructor(address _tokenContract, bytes32 _taskId) {
@@ -96,52 +96,38 @@ contract Escrow {
     }
 
     // Now validates a given merkle proof against a recent block hash and checks the event's contents against the signal's metadata
-    function collect(
-        ReceiptProof calldata proof,
-        uint256 targetBlockNumber
-    ) public {
+    function collect(ReceiptProof calldata proof, uint256 targetBlockNumber) public {
         require(funded, "Contract not funded");
         require(msg.sender == bondedExecutor && is_bonded(), "Only bonded executor can collect");
-        
+
         // Validate target block is recent and accessible
         require(targetBlockNumber <= block.number, "Target block is in the future");
         require(block.number - targetBlockNumber <= maxBlockLookback, "Target block too old");
-        
+
         // Get the target block hash
         bytes32 targetBlockHash = blockhash(targetBlockNumber);
         require(targetBlockHash != bytes32(0), "Unable to retrieve block hash");
-        
+
         // Validate block header hash matches target block
         require(keccak256(proof.blockHeader) == targetBlockHash, "Block header hash mismatch");
-        
+
         // Also verify the block number in header matches target
         require(
-            BlockHeaderParser.extractBlockNumber(proof.blockHeader) == targetBlockNumber, 
-            "Header block number mismatch"
+            BlockHeaderParser.extractBlockNumber(proof.blockHeader) == targetBlockNumber, "Header block number mismatch"
         );
-        
+
         // Extract receipts root from block header
         bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(proof.blockHeader);
-        
+
         // Verify receipt proof against receipts root using MPT verification
         require(
-            MPTVerifier.verifyReceiptProof(
-                proof.receiptRlp,
-                proof.proofNodes,
-                proof.receiptPath, 
-                receiptsRoot
-            ),
+            MPTVerifier.verifyReceiptProof(proof.receiptRlp, proof.proofNodes, proof.receiptPath, receiptsRoot),
             "Invalid receipt MPT proof"
         );
-        
+
         // Extract and validate the task completion log
         require(
-            ReceiptValidator.validateTaskCompletionInReceipt(
-                proof.receiptRlp, 
-                proof.logIndex,
-                taskId,
-                bondedExecutor
-            ),
+            ReceiptValidator.validateTaskCompletionInReceipt(proof.receiptRlp, proof.logIndex, taskId, bondedExecutor),
             "Invalid task completion log"
         );
 
