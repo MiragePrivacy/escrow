@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
+import "./BlockHeaderParser.sol";
+import "./MPTVerifier.sol";
+import "./ReceiptValidator.sol";
+
 interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
@@ -16,6 +20,10 @@ contract Escrow {
     uint256 public currentPaymentAmount;
     uint256 public originalRewardAmount;
 
+    // The following variables are for Merkle proof validation
+    bytes32 public immutable taskId; // Unique identifier for this specific task
+    uint256 public immutable maxBlockLookback; // Maximum blocks to look back for validation
+
     // The following variables are dynamically adjusted by the contract when a bond or cancellation request is submitted.
     address public bondedExecutor;
     uint256 public executionDeadline;
@@ -24,9 +32,21 @@ contract Escrow {
     bool public cancellationRequest;
     bool public funded; // marks if the contract ahs funds to pay out the executors or not (if it doesn't have funds, no executor should be accepted)
 
-    constructor(address _tokenContract) {
+    // Based on Nomad's ProofBlob structure
+    // https://github.com/MiragePrivacy/Nomad/blob/HEAD/crates/ethereum/src/proof.rs#L24-L35
+    struct ReceiptProof {
+        bytes blockHeader;      // RLP-encoded block header
+        bytes receiptRlp;       // RLP-encoded target receipt  
+        bytes proofNodes;       // Serialized MPT proof nodes
+        bytes receiptPath;      // RLP-encoded receipt index
+        uint256 logIndex;       // Index of target log in receipt
+    }
+
+    constructor(address _tokenContract, bytes32 _taskId) {
         tokenContract = _tokenContract;
         deployerAddress = msg.sender;
+        taskId = _taskId;
+        maxBlockLookback = 256;
     }
 
     // takes currentRewardAmount + currentPaymentAmount from the deployer's balance from the tokenContract.
@@ -75,10 +95,55 @@ contract Escrow {
         cancellationRequest = false;
     }
 
-    // ignore the proof for now, it's a placeholder, mark it as such. releases the bondAmount + currentRewardAmount + pyamnetAmount to the caller only and only if the caller is bondedExecutor
-    function collect() public {
+    // Now validates a given merkle proof against a recent block hash and checks the event's contents against the signal's metadata
+    function collect(
+        ReceiptProof calldata proof,
+        uint256 targetBlockNumber
+    ) public {
         require(funded, "Contract not funded");
         require(msg.sender == bondedExecutor && is_bonded(), "Only bonded executor can collect");
+        
+        // Validate target block is recent and accessible
+        require(targetBlockNumber <= block.number, "Target block is in the future");
+        require(block.number - targetBlockNumber <= maxBlockLookback, "Target block too old");
+        
+        // Get the target block hash
+        bytes32 targetBlockHash = blockhash(targetBlockNumber);
+        require(targetBlockHash != bytes32(0), "Unable to retrieve block hash");
+        
+        // Validate block header hash matches target block
+        require(keccak256(proof.blockHeader) == targetBlockHash, "Block header hash mismatch");
+        
+        // Also verify the block number in header matches target
+        require(
+            BlockHeaderParser.extractBlockNumber(proof.blockHeader) == targetBlockNumber, 
+            "Header block number mismatch"
+        );
+        
+        // Extract receipts root from block header
+        bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(proof.blockHeader);
+        
+        // Verify receipt proof against receipts root using MPT verification
+        require(
+            MPTVerifier.verifyReceiptProof(
+                proof.receiptRlp,
+                proof.proofNodes,
+                proof.receiptPath, 
+                receiptsRoot
+            ),
+            "Invalid receipt MPT proof"
+        );
+        
+        // Extract and validate the task completion log
+        require(
+            ReceiptValidator.validateTaskCompletionInReceipt(
+                proof.receiptRlp, 
+                proof.logIndex,
+                taskId,
+                bondedExecutor
+            ),
+            "Invalid task completion log"
+        );
 
         uint256 payout = bondAmount + currentRewardAmount + currentPaymentAmount;
         address executor = bondedExecutor;
