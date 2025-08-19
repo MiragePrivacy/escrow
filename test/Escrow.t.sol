@@ -192,13 +192,10 @@ contract EscrowTest is Test {
         escrow.resume();
     }
 
-    // Note: These collect tests will fail because they don't provide valid Merkle proofs
-    // In practice, you would need to generate real receipt proofs or mock the validation
     function testCollectRequiresProof() public {
         _fundContract();
         _bondExecutor();
 
-        // Create dummy proof (will fail validation)
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
             blockHeader: hex"",
             receiptRlp: hex"",
@@ -208,7 +205,7 @@ contract EscrowTest is Test {
         });
 
         vm.prank(executor);
-        vm.expectRevert(); // Will revert due to invalid proof
+        vm.expectRevert();
         escrow.collect(dummyProof, block.number - 1);
     }
 
