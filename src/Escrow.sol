@@ -12,7 +12,7 @@ interface IERC20 {
 }
 
 contract Escrow {
-    // The following variables are set up in the contructor.
+    // The following variables are set up in the constructor.
     address immutable deployerAddress;
     address immutable tokenContract; // The tokens used in the escrow
     // address immutable paymentTokenContract; // The tokens used in the payment to the recipient
@@ -21,7 +21,8 @@ contract Escrow {
     uint256 public originalRewardAmount;
 
     // The following variables are for Merkle proof validation
-    bytes32 public immutable taskId; // Unique identifier for this specific task
+    address public immutable expectedRecipient; // The intended recipient of the transfer
+    uint256 public immutable expectedAmount; // The expected transfer amount
     uint256 public immutable maxBlockLookback; // Maximum blocks to look back for validation
 
     // The following variables are dynamically adjusted by the contract when a bond or cancellation request is submitted.
@@ -30,10 +31,9 @@ contract Escrow {
     uint256 public bondAmount;
     uint256 public totalBondsDeposited;
     bool public cancellationRequest;
-    bool public funded; // marks if the contract ahs funds to pay out the executors or not (if it doesn't have funds, no executor should be accepted)
+    bool public funded; // marks if the contract has funds to pay out the executors or not (if it doesn't have funds, no executor should be accepted)
 
-    // Based on Nomad's ProofBlob structure
-    // https://github.com/MiragePrivacy/Nomad/blob/HEAD/crates/ethereum/src/proof.rs#L24-L35
+    // Based on Nomad's proof structure
     struct ReceiptProof {
         bytes blockHeader; // RLP-encoded block header
         bytes receiptRlp; // RLP-encoded target receipt
@@ -42,10 +42,11 @@ contract Escrow {
         uint256 logIndex; // Index of target log in receipt
     }
 
-    constructor(address _tokenContract, bytes32 _taskId) {
+    constructor(address _tokenContract, address _expectedRecipient, uint256 _expectedAmount) {
         tokenContract = _tokenContract;
+        expectedRecipient = _expectedRecipient;
+        expectedAmount = _expectedAmount;
         deployerAddress = msg.sender;
-        taskId = _taskId;
         maxBlockLookback = 256;
     }
 
@@ -61,7 +62,7 @@ contract Escrow {
         funded = true;
     }
 
-    // takes _bondAmount from the caller's balance of the tokenContract. The bondstatus is now bonded, execution deadline is current block timestam + 5 minutes. Sets bondedexecutor to the caller. Will only accept a bond if the cancellationrequest is set to false, and no one is bonded.
+    // takes _bondAmount from the caller's balance of the tokenContract. The bondstatus is now bonded, execution deadline is current block timestamp + 5 minutes. Sets bondedexecutor to the caller. Will only accept a bond if the cancellationrequest is set to false, and no one is bonded.
     function bond(uint256 _bondAmount) public {
         require(funded, "Contract not funded");
         require(!cancellationRequest, "Cancellation requested");
@@ -95,8 +96,8 @@ contract Escrow {
         cancellationRequest = false;
     }
 
-    // Now validates a given merkle proof against a recent block hash and checks the event's contents against the signal's metadata
-    function collect(ReceiptProof calldata proof, uint256 targetBlockNumber) public {
+    // Now validates a given merkle proof against a recent block hash and checks the Transfer event's contents
+    function collect(ReceiptProof calldata proof, uint256 targetBlockNumber, address executorEOA2) public {
         require(funded, "Contract not funded");
         require(msg.sender == bondedExecutor && is_bonded(), "Only bonded executor can collect");
 
@@ -125,10 +126,12 @@ contract Escrow {
             "Invalid receipt MPT proof"
         );
 
-        // Extract and validate the task completion log
+        // Extract and validate the Transfer event
         require(
-            ReceiptValidator.validateTaskCompletionInReceipt(proof.receiptRlp, proof.logIndex, taskId, bondedExecutor),
-            "Invalid task completion log"
+            ReceiptValidator.validateTransferInReceipt(
+                proof.receiptRlp, proof.logIndex, tokenContract, executorEOA2, expectedRecipient, expectedAmount
+            ),
+            "Invalid Transfer event"
         );
 
         uint256 payout = bondAmount + currentRewardAmount + currentPaymentAmount;

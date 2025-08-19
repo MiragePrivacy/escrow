@@ -6,24 +6,28 @@ import "./RLPParser.sol";
 /**
  * @title ReceiptValidator
  * @dev Library for validating transaction receipts and event logs
- * Handles EIP-2718 typed receipts and TaskCompleted event validation
+ * Handles EIP-2718 typed receipts and Transfer event validation
  */
 library ReceiptValidator {
     using RLPParser for bytes;
 
     /**
-     * @dev Validate task completion log in receipt
+     * @dev Validate Transfer event in receipt
      * @param receiptRlp RLP-encoded transaction receipt
      * @param logIndex Index of the target log in the receipt
-     * @param taskId Expected task identifier
-     * @param expectedExecutor Expected executor address
+     * @param tokenContract Expected token contract address
+     * @param fromAddress Expected sender address (executor's EOA 2)
+     * @param toAddress Expected recipient address
+     * @param expectedAmount Expected transfer amount
      * @return True if validation passes
      */
-    function validateTaskCompletionInReceipt(
+    function validateTransferInReceipt(
         bytes calldata receiptRlp,
         uint256 logIndex,
-        bytes32 taskId,
-        address expectedExecutor
+        address tokenContract,
+        address fromAddress,
+        address toAddress,
+        uint256 expectedAmount
     ) internal pure returns (bool) {
         uint256 offset = 0;
 
@@ -59,22 +63,26 @@ library ReceiptValidator {
         }
 
         // Validate the target log
-        return validateTaskCompletedLog(receiptRlp, offset, taskId, expectedExecutor);
+        return validateTransferLog(receiptRlp, offset, tokenContract, fromAddress, toAddress, expectedAmount);
     }
 
     /**
-     * @dev Validate a TaskCompleted event log
+     * @dev Validate a Transfer event log
      * @param receiptRlp The receipt data
      * @param logOffset Offset to the target log
-     * @param taskId Expected task identifier
-     * @param expectedExecutor Expected executor address
+     * @param tokenContract Expected token contract address
+     * @param fromAddress Expected sender address
+     * @param toAddress Expected recipient address
+     * @param expectedAmount Expected transfer amount
      * @return True if validation passes
      */
-    function validateTaskCompletedLog(
+    function validateTransferLog(
         bytes calldata receiptRlp,
         uint256 logOffset,
-        bytes32 taskId,
-        address expectedExecutor
+        address tokenContract,
+        address fromAddress,
+        address toAddress,
+        uint256 expectedAmount
     ) private pure returns (bool) {
         uint256 offset = logOffset;
 
@@ -86,7 +94,7 @@ library ReceiptValidator {
             offset += 1;
         }
 
-        // Parse emitter address
+        // Parse emitter address (should be the token contract)
         (bytes memory addrBytes, uint256 addrLen) = parseAddressFromRLP(receiptRlp, offset);
         require(addrBytes.length == 20, "Invalid emitter address length");
 
@@ -95,11 +103,11 @@ library ReceiptValidator {
         assembly {
             emitter := mload(add(addrBytes, 20))
         }
-        // NOTE: Add emitter validation here if needed: require(emitter == expectedEmitter, "Wrong emitter");
+        require(emitter == tokenContract, "Wrong token contract");
         offset += addrLen;
 
         // Parse and validate topics
-        return validateEventTopics(receiptRlp, offset, taskId, expectedExecutor);
+        return validateTransferTopics(receiptRlp, offset, fromAddress, toAddress, expectedAmount);
     }
 
     /**
@@ -131,18 +139,20 @@ library ReceiptValidator {
     }
 
     /**
-     * @dev Validate event topics for TaskCompleted event
+     * @dev Validate event topics for Transfer event
      * @param receiptRlp The receipt data
      * @param topicsOffset Offset to the topics array
-     * @param taskId Expected task identifier
-     * @param expectedExecutor Expected executor address
+     * @param fromAddress Expected sender address
+     * @param toAddress Expected recipient address
+     * @param expectedAmount Expected transfer amount
      * @return True if validation passes
      */
-    function validateEventTopics(
+    function validateTransferTopics(
         bytes calldata receiptRlp,
         uint256 topicsOffset,
-        bytes32 taskId,
-        address expectedExecutor
+        address fromAddress,
+        address toAddress,
+        uint256 expectedAmount
     ) private pure returns (bool) {
         uint256 offset = topicsOffset;
 
@@ -156,23 +166,30 @@ library ReceiptValidator {
 
         // Check first topic (event signature)
         bytes32 eventSig = receiptRlp.extractBytes32(offset);
-        bytes32 expectedSig = keccak256("TaskCompleted(bytes32,address,bytes32,uint256)");
+        bytes32 expectedSig = keccak256("Transfer(address,address,uint256)");
         require(eventSig == expectedSig, "Wrong event signature");
 
-        // Check second topic (task ID)
+        // Check second topic (from address)
         offset = receiptRlp.skipItem(offset);
-        bytes32 logTaskId = receiptRlp.extractBytes32(offset);
-        require(logTaskId == taskId, "Task ID mismatch");
+        bytes32 logFromAddr = receiptRlp.extractBytes32(offset);
+        require(address(uint160(uint256(logFromAddr))) == fromAddress, "From address mismatch");
 
-        // Check third topic (executor)
+        // Check third topic (to address)
         offset = receiptRlp.skipItem(offset);
-        bytes32 logExecutor = receiptRlp.extractBytes32(offset);
-        require(address(uint160(uint256(logExecutor))) == expectedExecutor, "Executor mismatch");
+        bytes32 logToAddr = receiptRlp.extractBytes32(offset);
+        require(address(uint160(uint256(logToAddr))) == toAddress, "To address mismatch");
 
-        // Parse and validate data payload (optional)
+        // Parse and validate data payload (amount)
         offset = receiptRlp.skipItem(topicsOffset); // Skip entire topics array
         (bytes memory dataBytes,) = parseDataFromRLP(receiptRlp, offset);
-        // NOTE: Add data validation here if needed
+
+        // Convert data bytes to uint256 (amount)
+        require(dataBytes.length <= 32, "Amount data too long");
+        uint256 logAmount = 0;
+        for (uint256 i = 0; i < dataBytes.length; i++) {
+            logAmount = (logAmount << 8) | uint8(dataBytes[i]);
+        }
+        require(logAmount == expectedAmount, "Transfer amount mismatch");
 
         return true;
     }

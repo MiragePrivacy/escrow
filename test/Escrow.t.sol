@@ -8,6 +8,8 @@ contract MockERC20 {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
 
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
     function mint(address to, uint256 amount) external {
         balanceOf[to] += amount;
     }
@@ -16,6 +18,7 @@ contract MockERC20 {
         require(balanceOf[msg.sender] >= amount, "Insufficient balance");
         balanceOf[msg.sender] -= amount;
         balanceOf[to] += amount;
+        emit Transfer(msg.sender, to, amount);
         return true;
     }
 
@@ -25,6 +28,7 @@ contract MockERC20 {
         balanceOf[from] -= amount;
         balanceOf[to] += amount;
         allowance[from][msg.sender] -= amount;
+        emit Transfer(from, to, amount);
         return true;
     }
 
@@ -39,21 +43,23 @@ contract EscrowTest is Test {
     MockERC20 public token;
     address public deployer;
     address public executor;
+    address public recipient;
     address public other;
 
-    bytes32 constant TASK_ID = keccak256("test-task-123");
-    uint256 constant REWARD_AMOUNT = 1000e18;
+    uint256 constant EXPECTED_AMOUNT = 1000e18;
+    uint256 constant REWARD_AMOUNT = 500e18;
     uint256 constant PAYMENT_AMOUNT = 500e18;
-    uint256 constant BOND_AMOUNT = 500e18;
+    uint256 constant BOND_AMOUNT = 250e18; // Half of reward amount
 
     function setUp() public {
         deployer = makeAddr("deployer");
         executor = makeAddr("executor");
+        recipient = makeAddr("recipient");
         other = makeAddr("other");
 
         vm.startPrank(deployer);
         token = new MockERC20();
-        escrow = new Escrow(address(token), TASK_ID); // Fixed: Added taskId parameter
+        escrow = new Escrow(address(token), recipient, EXPECTED_AMOUNT);
         vm.stopPrank();
 
         token.mint(deployer, 10000e18);
@@ -65,7 +71,8 @@ contract EscrowTest is Test {
         assertEq(escrow.currentRewardAmount(), 0);
         assertEq(escrow.currentPaymentAmount(), 0);
         assertEq(escrow.funded(), false);
-        assertEq(escrow.taskId(), TASK_ID); // Test taskId is set correctly
+        assertEq(escrow.expectedRecipient(), recipient);
+        assertEq(escrow.expectedAmount(), EXPECTED_AMOUNT);
     }
 
     function testFund() public {
@@ -196,6 +203,8 @@ contract EscrowTest is Test {
         _fundContract();
         _bondExecutor();
 
+        address executorEOA2 = makeAddr("executorEOA2");
+
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
             blockHeader: hex"",
             receiptRlp: hex"",
@@ -206,10 +215,12 @@ contract EscrowTest is Test {
 
         vm.prank(executor);
         vm.expectRevert();
-        escrow.collect(dummyProof, block.number - 1);
+        escrow.collect(dummyProof, block.number - 1, executorEOA2);
     }
 
     function testCollectNotFunded() public {
+        address executorEOA2 = makeAddr("executorEOA2");
+
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
             blockHeader: hex"",
             receiptRlp: hex"",
@@ -220,12 +231,14 @@ contract EscrowTest is Test {
 
         vm.prank(executor);
         vm.expectRevert("Contract not funded");
-        escrow.collect(dummyProof, block.number - 1);
+        escrow.collect(dummyProof, block.number - 1, executorEOA2);
     }
 
     function testCollectNotBondedExecutor() public {
         _fundContract();
         _bondExecutor();
+
+        address executorEOA2 = makeAddr("executorEOA2");
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
             blockHeader: hex"",
@@ -237,7 +250,7 @@ contract EscrowTest is Test {
 
         vm.prank(other);
         vm.expectRevert("Only bonded executor can collect");
-        escrow.collect(dummyProof, block.number - 1);
+        escrow.collect(dummyProof, block.number - 1, executorEOA2);
     }
 
     function testCollectAfterDeadline() public {
@@ -245,6 +258,8 @@ contract EscrowTest is Test {
         _bondExecutor();
 
         vm.warp(block.timestamp + 6 minutes);
+
+        address executorEOA2 = makeAddr("executorEOA2");
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
             blockHeader: hex"",
@@ -256,7 +271,7 @@ contract EscrowTest is Test {
 
         vm.prank(executor);
         vm.expectRevert("Only bonded executor can collect");
-        escrow.collect(dummyProof, block.number - 1);
+        escrow.collect(dummyProof, block.number - 1, executorEOA2);
     }
 
     function testWithdraw() public {

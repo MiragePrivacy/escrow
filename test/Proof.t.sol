@@ -8,6 +8,8 @@ contract MockERC20 {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
 
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
     function mint(address to, uint256 amount) external {
         balanceOf[to] += amount;
     }
@@ -16,6 +18,7 @@ contract MockERC20 {
         require(balanceOf[msg.sender] >= amount, "Insufficient balance");
         balanceOf[msg.sender] -= amount;
         balanceOf[to] += amount;
+        emit Transfer(msg.sender, to, amount);
         return true;
     }
 
@@ -25,6 +28,7 @@ contract MockERC20 {
         balanceOf[from] -= amount;
         balanceOf[to] += amount;
         allowance[from][msg.sender] -= amount;
+        emit Transfer(from, to, amount);
         return true;
     }
 
@@ -39,33 +43,33 @@ contract EscrowMPTTest is Test {
     MockERC20 public token;
 
     address public deployer;
-    address public executor;
-    bytes32 constant TASK_ID = keccak256("mpt-test-task");
+    address public recipient;
+    uint256 constant TRANSFER_AMOUNT = 1000e18;
 
-    uint256 constant REWARD_AMOUNT = 1000e18;
+    uint256 constant REWARD_AMOUNT = 500e18;
     uint256 constant PAYMENT_AMOUNT = 500e18;
-    uint256 constant BOND_AMOUNT = 500e18;
+    uint256 constant BOND_AMOUNT = 250e18;
 
     uint256 constant TARGET_BLOCK_NUMBER = 396;
     bytes32 constant TARGET_BLOCK_HASH = 0xa415edcdb485c895fd657fa676f8fab30d7816db2f33616ca2d9ebc1d165331d;
 
     function setUp() public {
         deployer = makeAddr("deployer");
-        executor = makeAddr("executor");
+        recipient = makeAddr("recipient");
 
         vm.startPrank(deployer);
         token = new MockERC20();
-        escrow = new Escrow(address(token), TASK_ID);
+        escrow = new Escrow(address(token), recipient, TRANSFER_AMOUNT);
         vm.stopPrank();
 
         token.mint(deployer, 10000e18);
-        token.mint(executor, 10000e18);
     }
 
-    function testCollectWithRealProof() public {
+    function testCollectWithTransferProof() public {
         _fundContract();
 
         address proofExecutor = address(0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc);
+
         token.mint(proofExecutor, 10000e18);
 
         vm.startPrank(proofExecutor);
@@ -73,7 +77,7 @@ contract EscrowMPTTest is Test {
         escrow.bond(BOND_AMOUNT);
         vm.stopPrank();
 
-        vm.roll(TARGET_BLOCK_NUMBER + 10); // Set current block higher than target
+        vm.roll(TARGET_BLOCK_NUMBER + 10);
         vm.setBlockhash(TARGET_BLOCK_NUMBER, TARGET_BLOCK_HASH);
 
         Escrow.ReceiptProof memory proof = Escrow.ReceiptProof({
@@ -85,8 +89,8 @@ contract EscrowMPTTest is Test {
         });
 
         vm.prank(proofExecutor);
-        vm.expectRevert("Wrong event signature");
-        escrow.collect(proof, TARGET_BLOCK_NUMBER);
+        vm.expectRevert("Wrong token contract");
+        escrow.collect(proof, TARGET_BLOCK_NUMBER, proofExecutor);
     }
 
     function _fundContract() internal {
