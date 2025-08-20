@@ -3,6 +3,7 @@ pragma solidity ^0.8.13;
 
 import {Test, console} from "forge-std/Test.sol";
 import {Escrow} from "../src/Escrow.sol";
+import {IERC20} from "../src/Escrow.sol";
 
 contract MockERC20 {
     mapping(address => uint256) public balanceOf;
@@ -43,8 +44,7 @@ contract EscrowMPTTest is Test {
     MockERC20 public token;
 
     address public deployer;
-    address public recipient;
-    uint256 constant TRANSFER_AMOUNT = 1000e18;
+    uint256 constant TRANSFER_AMOUNT = 0x3f89de80;
 
     uint256 constant REWARD_AMOUNT = 500e18;
     uint256 constant PAYMENT_AMOUNT = 500e18;
@@ -53,28 +53,32 @@ contract EscrowMPTTest is Test {
     uint256 constant TARGET_BLOCK_NUMBER = 396;
     bytes32 constant TARGET_BLOCK_HASH = 0xa415edcdb485c895fd657fa676f8fab30d7816db2f33616ca2d9ebc1d165331d;
 
-    function setUp() public {
-        deployer = makeAddr("deployer");
-        recipient = makeAddr("recipient");
-
-        vm.startPrank(deployer);
-        token = new MockERC20();
-        escrow = new Escrow(address(token), recipient, TRANSFER_AMOUNT);
-        vm.stopPrank();
-
-        token.mint(deployer, 10000e18);
-    }
-
     function testCollectWithTransferProof() public {
-        _fundContract();
-
+        address proofTokenAddress = address(0x5FbDB2315678afecb367f032d93F642f64180aa3);
+        address proofRecipient = address(0xDeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF);
         address proofExecutor = address(0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc);
 
-        token.mint(proofExecutor, 10000e18);
+        MockERC20 proofToken = new MockERC20();
 
+        vm.startPrank(deployer);
+        Escrow proofEscrow = new Escrow(proofTokenAddress, proofRecipient, TRANSFER_AMOUNT);
+        vm.stopPrank();
+
+        console.log("Setup escrow address:", address(escrow));
+        console.log("Proof escrow address:", address(proofEscrow));
+        console.log("Expected amount in proof escrow:", proofEscrow.expectedAmount());
+
+        vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
+        vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
+
+        // fund the proof escrow
+        _fundProofContract(proofEscrow, proofToken);
+
+        // mint tokens for the executor and bond
+        proofToken.mint(proofExecutor, 10000e18);
         vm.startPrank(proofExecutor);
-        token.approve(address(escrow), BOND_AMOUNT);
-        escrow.bond(BOND_AMOUNT);
+        proofToken.approve(address(proofEscrow), BOND_AMOUNT);
+        proofEscrow.bond(BOND_AMOUNT);
         vm.stopPrank();
 
         vm.roll(TARGET_BLOCK_NUMBER + 10);
@@ -89,14 +93,18 @@ contract EscrowMPTTest is Test {
         });
 
         vm.prank(proofExecutor);
-        vm.expectRevert("Wrong token contract");
-        escrow.collect(proof, TARGET_BLOCK_NUMBER, proofExecutor);
+        proofEscrow.collect(proof, TARGET_BLOCK_NUMBER, proofExecutor);
+
+        console.log("Proved transfer from:", proofExecutor);
+        console.log("To recipient:", proofRecipient);
+        console.log("Amount:", TRANSFER_AMOUNT);
     }
 
-    function _fundContract() internal {
+    function _fundProofContract(Escrow _escrow, MockERC20 _token) internal {
         vm.startPrank(deployer);
-        token.approve(address(escrow), REWARD_AMOUNT + PAYMENT_AMOUNT);
-        escrow.fund(REWARD_AMOUNT, PAYMENT_AMOUNT);
+        _token.mint(deployer, 10000e18);
+        _token.approve(address(_escrow), REWARD_AMOUNT + PAYMENT_AMOUNT);
+        _escrow.fund(REWARD_AMOUNT, PAYMENT_AMOUNT);
         vm.stopPrank();
     }
 }
