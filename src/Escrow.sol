@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
+import "./BlockHeaderParser.sol";
+import "./MPTVerifier.sol";
+import "./ReceiptValidator.sol";
+
 interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
@@ -8,7 +12,7 @@ interface IERC20 {
 }
 
 contract Escrow {
-    // The following variables are set up in the contructor.
+    // The following variables are set up in the constructor.
     address immutable deployerAddress;
     address immutable tokenContract; // The tokens used in the escrow
     // address immutable paymentTokenContract; // The tokens used in the payment to the recipient
@@ -16,17 +20,34 @@ contract Escrow {
     uint256 public currentPaymentAmount;
     uint256 public originalRewardAmount;
 
+    // The following variables are for Merkle proof validation
+    address public immutable expectedRecipient; // The intended recipient of the transfer
+    uint256 public immutable expectedAmount; // The expected transfer amount
+    uint256 public immutable maxBlockLookback; // Maximum blocks to look back for validation
+
     // The following variables are dynamically adjusted by the contract when a bond or cancellation request is submitted.
     address public bondedExecutor;
     uint256 public executionDeadline;
     uint256 public bondAmount;
     uint256 public totalBondsDeposited;
     bool public cancellationRequest;
-    bool public funded; // marks if the contract ahs funds to pay out the executors or not (if it doesn't have funds, no executor should be accepted)
+    bool public funded; // marks if the contract has funds to pay out the executors or not (if it doesn't have funds, no executor should be accepted)
 
-    constructor(address _tokenContract) {
+    // Based on Nomad's proof structure
+    struct ReceiptProof {
+        bytes blockHeader; // RLP-encoded block header
+        bytes receiptRlp; // RLP-encoded target receipt
+        bytes proofNodes; // Serialized MPT proof nodes
+        bytes receiptPath; // RLP-encoded receipt index
+        uint256 logIndex; // Index of target log in receipt
+    }
+
+    constructor(address _tokenContract, address _expectedRecipient, uint256 _expectedAmount) {
         tokenContract = _tokenContract;
+        expectedRecipient = _expectedRecipient;
+        expectedAmount = _expectedAmount;
         deployerAddress = msg.sender;
+        maxBlockLookback = 256;
     }
 
     // takes currentRewardAmount + currentPaymentAmount from the deployer's balance from the tokenContract.
@@ -41,7 +62,7 @@ contract Escrow {
         funded = true;
     }
 
-    // takes _bondAmount from the caller's balance of the tokenContract. The bondstatus is now bonded, execution deadline is current block timestam + 5 minutes. Sets bondedexecutor to the caller. Will only accept a bond if the cancellationrequest is set to false, and no one is bonded.
+    // takes _bondAmount from the caller's balance of the tokenContract. The bondstatus is now bonded, execution deadline is current block timestamp + 5 minutes. Sets bondedexecutor to the caller. Will only accept a bond if the cancellationrequest is set to false, and no one is bonded.
     function bond(uint256 _bondAmount) public {
         require(funded, "Contract not funded");
         require(!cancellationRequest, "Cancellation requested");
@@ -75,10 +96,43 @@ contract Escrow {
         cancellationRequest = false;
     }
 
-    // ignore the proof for now, it's a placeholder, mark it as such. releases the bondAmount + currentRewardAmount + pyamnetAmount to the caller only and only if the caller is bondedExecutor
-    function collect() public {
+    // Now validates a given merkle proof against a recent block hash and checks the Transfer event's contents
+    function collect(ReceiptProof calldata proof, uint256 targetBlockNumber, address executorEOA2) public {
         require(funded, "Contract not funded");
         require(msg.sender == bondedExecutor && is_bonded(), "Only bonded executor can collect");
+
+        // Validate target block is recent and accessible
+        require(targetBlockNumber <= block.number, "Target block is in the future");
+        require(block.number - targetBlockNumber <= maxBlockLookback, "Target block too old");
+
+        // Get the target block hash
+        bytes32 targetBlockHash = blockhash(targetBlockNumber);
+        require(targetBlockHash != bytes32(0), "Unable to retrieve block hash");
+
+        // Validate block header hash matches target block
+        require(keccak256(proof.blockHeader) == targetBlockHash, "Block header hash mismatch");
+
+        // Also verify the block number in header matches target
+        require(
+            BlockHeaderParser.extractBlockNumber(proof.blockHeader) == targetBlockNumber, "Header block number mismatch"
+        );
+
+        // Extract receipts root from block header
+        bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(proof.blockHeader);
+
+        // Verify receipt proof against receipts root using MPT verification
+        require(
+            MPTVerifier.verifyReceiptProof(proof.receiptRlp, proof.proofNodes, proof.receiptPath, receiptsRoot),
+            "Invalid receipt MPT proof"
+        );
+
+        // Extract and validate the Transfer event
+        require(
+            ReceiptValidator.validateTransferInReceipt(
+                proof.receiptRlp, proof.logIndex, tokenContract, executorEOA2, expectedRecipient, expectedAmount
+            ),
+            "Invalid Transfer event"
+        );
 
         uint256 payout = bondAmount + currentRewardAmount + currentPaymentAmount;
         address executor = bondedExecutor;
