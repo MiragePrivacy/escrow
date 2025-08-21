@@ -203,8 +203,6 @@ contract EscrowTest is Test {
         _fundContract();
         _bondExecutor();
 
-        address executorEOA2 = makeAddr("executorEOA2");
-
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
             blockHeader: hex"",
             receiptRlp: hex"",
@@ -215,12 +213,10 @@ contract EscrowTest is Test {
 
         vm.prank(executor);
         vm.expectRevert();
-        escrow.collect(dummyProof, block.number - 1, executorEOA2);
+        escrow.collect(dummyProof, block.number - 1);
     }
 
     function testCollectNotFunded() public {
-        address executorEOA2 = makeAddr("executorEOA2");
-
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
             blockHeader: hex"",
             receiptRlp: hex"",
@@ -231,14 +227,12 @@ contract EscrowTest is Test {
 
         vm.prank(executor);
         vm.expectRevert("Contract not funded");
-        escrow.collect(dummyProof, block.number - 1, executorEOA2);
+        escrow.collect(dummyProof, block.number - 1);
     }
 
     function testCollectNotBondedExecutor() public {
         _fundContract();
         _bondExecutor();
-
-        address executorEOA2 = makeAddr("executorEOA2");
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
             blockHeader: hex"",
@@ -250,7 +244,7 @@ contract EscrowTest is Test {
 
         vm.prank(other);
         vm.expectRevert("Only bonded executor can collect");
-        escrow.collect(dummyProof, block.number - 1, executorEOA2);
+        escrow.collect(dummyProof, block.number - 1);
     }
 
     function testCollectAfterDeadline() public {
@@ -258,8 +252,6 @@ contract EscrowTest is Test {
         _bondExecutor();
 
         vm.warp(block.timestamp + 6 minutes);
-
-        address executorEOA2 = makeAddr("executorEOA2");
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
             blockHeader: hex"",
@@ -271,7 +263,7 @@ contract EscrowTest is Test {
 
         vm.prank(executor);
         vm.expectRevert("Only bonded executor can collect");
-        escrow.collect(dummyProof, block.number - 1, executorEOA2);
+        escrow.collect(dummyProof, block.number - 1);
     }
 
     function testWithdraw() public {

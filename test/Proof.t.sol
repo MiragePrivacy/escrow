@@ -93,7 +93,7 @@ contract EscrowMPTTest is Test {
         });
 
         vm.prank(proofExecutor);
-        proofEscrow.collect(proof, TARGET_BLOCK_NUMBER, proofExecutor);
+        proofEscrow.collect(proof, TARGET_BLOCK_NUMBER);
 
         console.log("Proved transfer from:", proofExecutor);
         console.log("To recipient:", proofRecipient);
