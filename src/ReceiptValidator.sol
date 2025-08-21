@@ -16,7 +16,6 @@ library ReceiptValidator {
      * @param receiptRlp RLP-encoded transaction receipt
      * @param logIndex Index of the target log in the receipt
      * @param tokenContract Expected token contract address
-     * @param fromAddress Expected sender address (executor's EOA 2)
      * @param toAddress Expected recipient address
      * @param expectedAmount Expected transfer amount
      * @return True if validation passes
@@ -25,7 +24,6 @@ library ReceiptValidator {
         bytes calldata receiptRlp,
         uint256 logIndex,
         address tokenContract,
-        address fromAddress,
         address toAddress,
         uint256 expectedAmount
     ) internal pure returns (bool) {
@@ -63,7 +61,7 @@ library ReceiptValidator {
         }
 
         // Validate the target log
-        return validateTransferLog(receiptRlp, offset, tokenContract, fromAddress, toAddress, expectedAmount);
+        return validateTransferLog(receiptRlp, offset, tokenContract, toAddress, expectedAmount);
     }
 
     /**
@@ -71,7 +69,6 @@ library ReceiptValidator {
      * @param receiptRlp The receipt data
      * @param logOffset Offset to the target log
      * @param tokenContract Expected token contract address
-     * @param fromAddress Expected sender address
      * @param toAddress Expected recipient address
      * @param expectedAmount Expected transfer amount
      * @return True if validation passes
@@ -80,7 +77,6 @@ library ReceiptValidator {
         bytes calldata receiptRlp,
         uint256 logOffset,
         address tokenContract,
-        address fromAddress,
         address toAddress,
         uint256 expectedAmount
     ) private pure returns (bool) {
@@ -107,7 +103,7 @@ library ReceiptValidator {
         offset += addrLen;
 
         // Parse and validate topics
-        return validateTransferTopics(receiptRlp, offset, fromAddress, toAddress, expectedAmount);
+        return validateTransferTopics(receiptRlp, offset, toAddress, expectedAmount);
     }
 
     /**
@@ -142,7 +138,6 @@ library ReceiptValidator {
      * @dev Validate event topics for Transfer event
      * @param receiptRlp The receipt data
      * @param topicsOffset Offset to the topics array
-     * @param fromAddress Expected sender address
      * @param toAddress Expected recipient address
      * @param expectedAmount Expected transfer amount
      * @return True if validation passes
@@ -150,7 +145,6 @@ library ReceiptValidator {
     function validateTransferTopics(
         bytes calldata receiptRlp,
         uint256 topicsOffset,
-        address fromAddress,
         address toAddress,
         uint256 expectedAmount
     ) private pure returns (bool) {
@@ -169,10 +163,7 @@ library ReceiptValidator {
         bytes32 expectedSig = keccak256("Transfer(address,address,uint256)");
         require(eventSig == expectedSig, "Wrong event signature");
 
-        // Check second topic (from address)
         offset = receiptRlp.skipItem(offset);
-        bytes32 logFromAddr = receiptRlp.extractBytes32(offset);
-        require(address(uint160(uint256(logFromAddr))) == fromAddress, "From address mismatch");
 
         // Check third topic (to address)
         offset = receiptRlp.skipItem(offset);

@@ -97,7 +97,7 @@ contract Escrow {
     }
 
     // Now validates a given merkle proof against a recent block hash and checks the Transfer event's contents
-    function collect(ReceiptProof calldata proof, uint256 targetBlockNumber, address executorEOA2) public {
+    function collect(ReceiptProof calldata proof, uint256 targetBlockNumber) public {
         require(funded, "Contract not funded");
         require(msg.sender == bondedExecutor && is_bonded(), "Only bonded executor can collect");
 
@@ -129,7 +129,7 @@ contract Escrow {
         // Extract and validate the Transfer event
         require(
             ReceiptValidator.validateTransferInReceipt(
-                proof.receiptRlp, proof.logIndex, tokenContract, executorEOA2, expectedRecipient, expectedAmount
+                proof.receiptRlp, proof.logIndex, tokenContract, expectedRecipient, expectedAmount
             ),
             "Invalid Transfer event"
         );
