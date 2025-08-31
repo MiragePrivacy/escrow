@@ -14,7 +14,7 @@ library MPTVerifier {
     /**
      * @dev Verify receipt inclusion using Merkle Patricia Trie proof
      * @param receiptRlp RLP-encoded transaction receipt
-     * @param proofNodes Concatenated MPT proof nodes
+     * @param proofNodes RLP-encoded array of MPT proof nodes
      * @param receiptPath RLP-encoded transaction index (key)
      * @param receiptsRoot Root hash of the receipts trie
      * @return True if the proof is valid
@@ -35,25 +35,36 @@ library MPTVerifier {
     }
 
     /**
-     * @dev Core MPT proof verification algorithm
+     * @dev Core MPT proof verification algorithm with RLP array format
      * @param key The key to prove (RLP-encoded transaction index)
      * @param value The value to prove (transaction receipt)
-     * @param proof Concatenated proof nodes
+     * @param proofArray RLP-encoded array of proof nodes
      * @param root Root hash of the trie
      * @return True if the proof is valid
      */
-    function verifyProof(bytes memory key, bytes memory value, bytes calldata proof, bytes32 root)
+    function verifyProof(bytes memory key, bytes memory value, bytes calldata proofArray, bytes32 root)
         internal
         pure
         returns (bool)
     {
+        // Parse the RLP array header
+        uint256 arrayOffset = 0;
+        require(proofArray[0] >= 0xc0, "Expected RLP list for proof nodes");
+
+        if (proofArray[0] >= 0xf8) {
+            uint256 lengthBytes = uint8(proofArray[0]) - 0xf7;
+            arrayOffset = 1 + lengthBytes;
+        } else {
+            arrayOffset = 1;
+        }
+
         bytes32 currentHash = root;
-        uint256 proofOffset = 0;
+        uint256 proofOffset = arrayOffset;
         uint256 keyOffset = 0;
 
-        while (proofOffset < proof.length && keyOffset < key.length * 2) {
-            // Parse next node from proof
-            (bytes memory node, uint256 nodeLength) = proof.parseItem(proofOffset);
+        while (proofOffset < proofArray.length) {
+            // Parse next node from proof array
+            (bytes memory node, uint256 nodeLength) = proofArray.parseItem(proofOffset);
             proofOffset += nodeLength;
 
             // Verify current hash matches this node
@@ -64,13 +75,11 @@ library MPTVerifier {
             // Decode node to determine type
             uint256 nodeOffset = 0;
             if (node[0] >= 0xc0) {
-                // List node
                 nodeOffset = 1;
                 if (node[0] >= 0xf8) {
                     nodeOffset += uint8(node[0]) - 0xf7;
                 }
 
-                // Count list elements to classify node type
                 uint256 items = countListItems(node, nodeOffset);
 
                 if (items == 17) {
@@ -78,8 +87,12 @@ library MPTVerifier {
                     (bool success, uint256 newKeyOffset, bytes32 newHash) =
                         processBranchNode(node, nodeOffset, key, keyOffset, value);
 
-                    if (!success) return false;
-                    if (newHash == bytes32(0)) return true; // Found value
+                    if (!success) {
+                        return false;
+                    }
+                    if (newHash == bytes32(0)) {
+                        return true;
+                    }
 
                     keyOffset = newKeyOffset;
                     currentHash = newHash;
@@ -88,16 +101,20 @@ library MPTVerifier {
                     (bool success, uint256 newKeyOffset, bytes32 newHash) =
                         processLeafOrExtensionNode(node, nodeOffset, key, keyOffset, value);
 
-                    if (!success) return false;
-                    if (newHash == bytes32(0)) return true; // Found value
+                    if (!success) {
+                        return false;
+                    }
+                    if (newHash == bytes32(0)) {
+                        return true;
+                    }
 
                     keyOffset = newKeyOffset;
                     currentHash = newHash;
                 } else {
-                    return false; // Invalid node
+                    return false;
                 }
             } else {
-                return false; // Invalid node
+                return false;
             }
         }
 
@@ -206,15 +223,21 @@ library MPTVerifier {
         bytes memory nodeKey = extractKeyFromNode(keyEnc);
 
         if (isLeaf) {
-            // Leaf node
+            // Check if the remaining path in the key matches this leaf's key
             if (keyOffset + nodeKey.length == key.length * 2) {
-                if (compareKeys(key, keyOffset, nodeKey)) {
+                bool keyMatches = true;
+                if (nodeKey.length > 0) {
+                    keyMatches = compareKeys(key, keyOffset, nodeKey);
+                }
+
+                if (keyMatches) {
                     (bytes memory nodeValue,) = node.parseItem(nodeOffset + keyEncLen);
                     if (keccak256(nodeValue) == keccak256(value)) {
-                        return (true, keyOffset + nodeKey.length, bytes32(0)); // Found value
+                        return (true, keyOffset + nodeKey.length, bytes32(0));
                     }
                 }
             }
+
             return (false, 0, bytes32(0));
         } else {
             // Extension node
@@ -222,15 +245,16 @@ library MPTVerifier {
                 return (false, 0, bytes32(0));
             }
 
-            // Get next hash
             (bytes memory nextRef,) = node.parseItem(nodeOffset + keyEncLen);
             bytes32 hash;
             if (nextRef.length == 32) {
                 assembly {
                     hash := mload(add(nextRef, 32))
                 }
-            } else {
+            } else if (nextRef.length > 0) {
                 hash = keccak256(nextRef);
+            } else {
+                return (false, 0, bytes32(0));
             }
 
             return (true, keyOffset + nodeKey.length, hash);
