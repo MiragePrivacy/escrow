@@ -37,7 +37,7 @@ contract Escrow {
     struct ReceiptProof {
         bytes blockHeader; // RLP-encoded block header
         bytes receiptRlp; // RLP-encoded target receipt
-        bytes proofNodes; // Serialized MPT proof nodes
+        bytes proofNodes; // RLP-encoded array of MPT proof nodes
         bytes receiptPath; // RLP-encoded receipt index
         uint256 logIndex; // Index of target log in receipt
     }
