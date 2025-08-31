@@ -87,12 +87,8 @@ library MPTVerifier {
                     (bool success, uint256 newKeyOffset, bytes32 newHash) =
                         processBranchNode(node, nodeOffset, key, keyOffset, value);
 
-                    if (!success) {
-                        return false;
-                    }
-                    if (newHash == bytes32(0)) {
-                        return true;
-                    }
+                    if (!success) return false;
+                    if (newHash == bytes32(0)) return true;
 
                     keyOffset = newKeyOffset;
                     currentHash = newHash;
