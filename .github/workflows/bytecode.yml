@@ -1,0 +1,75 @@
+name: Bytecode Guard
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "artifacts/bytecode.hex"
+  push:
+    paths:
+      - "src/**"
+      - "artifacts/bytecode.hex"
+  workflow_dispatch:
+
+jobs:
+  guard:
+    name: Enforce bytecode update when src changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0  # needed to diff
+
+      - name: Determine diff range
+        id: range
+        shell: bash
+        run: |
+          set -euo pipefail
+          EVENT="${{ github.event_name }}"
+          if [[ "$EVENT" == "pull_request" ]]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          elif [[ "$EVENT" == "push" ]]; then
+            BASE="${{ github.event.before }}"
+          else
+            BASE=""
+          fi
+
+          # Fallback if BASE is empty or all zeros (e.g., first push)
+          if [[ -z "${BASE}" || "${BASE}" =~ ^0+$ ]]; then
+            if git rev-parse HEAD^ >/dev/null 2>&1; then
+              BASE="$(git rev-parse HEAD^)"
+            else
+              # Nothing to compare against, skip enforcement
+              echo "base=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          echo "Using BASE=$BASE .. HEAD=$GITHUB_SHA"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Enforce artifacts/bytecode.hex update
+        if: steps.range.outputs.base != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="${{ steps.range.outputs.base }}"
+          HEAD="$GITHUB_SHA"
+
+          CHANGED_FILES="$(git diff --name-only "$BASE" "$HEAD" || true)"
+          echo "Changed files:"
+          echo "$CHANGED_FILES" | sed 's/^/ - /' || true
+
+          if echo "$CHANGED_FILES" | grep -qE '^src/'; then
+            echo "Detected changes in src/."
+            if echo "$CHANGED_FILES" | grep -qE '^artifacts/bytecode\.hex$'; then
+              echo "artifacts/bytecode.hex changed as expected."
+            else
+              echo "::error title=Bytecode not updated::Changes in src/ require an updated artifacts/bytecode.hex."
+              exit 1
+            fi
+          else
+            echo "No changes in src/; no bytecode update required."
+          fi
