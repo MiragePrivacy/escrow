@@ -75,6 +75,9 @@ contract Escrow {
             tryResetBondData();
         }
 
+        // Prevent double bonding - no one can bond while another executor is actively bonded
+        require(!is_bonded(), "Another executor is already bonded");
+
         IERC20(tokenContract).transferFrom(msg.sender, address(this), _bondAmount);
 
         bondedExecutor = msg.sender;
