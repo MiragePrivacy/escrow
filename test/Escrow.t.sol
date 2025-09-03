@@ -327,6 +327,33 @@ contract EscrowTest is Test {
         assertFalse(escrow.is_bonded());
     }
 
+    function testDoubleBondingPrevented() public {
+        _fundContract();
+        _bondExecutor();
+
+        vm.startPrank(other);
+        token.approve(address(escrow), BOND_AMOUNT);
+        vm.expectRevert("Another executor is already bonded");
+        escrow.bond(BOND_AMOUNT);
+        vm.stopPrank();
+    }
+
+    function testBondAfterFirstExecutorStillActive() public {
+        _fundContract();
+        _bondExecutor();
+
+        vm.warp(block.timestamp + 4 minutes);
+        assertTrue(escrow.is_bonded());
+
+        vm.startPrank(other);
+        token.approve(address(escrow), BOND_AMOUNT);
+        vm.expectRevert("Another executor is already bonded");
+        escrow.bond(BOND_AMOUNT);
+        vm.stopPrank();
+
+        assertEq(escrow.bondedExecutor(), executor);
+    }
+
     function testMultipleBondCycles() public {
         _fundContract();
 
