@@ -60,7 +60,7 @@ contract EscrowMPTTest is Test {
         MockERC20 proofToken = new MockERC20();
 
         vm.startPrank(deployer);
-        Escrow proofEscrow = new Escrow(proofTokenAddress, proofRecipient, TRANSFER_AMOUNT);
+        Escrow proofEscrow = new Escrow(proofTokenAddress, proofRecipient, TRANSFER_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
         vm.stopPrank();
 
         console.log("Setup escrow address:", address(escrow));

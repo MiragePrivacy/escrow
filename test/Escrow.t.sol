@@ -59,7 +59,7 @@ contract EscrowTest is Test {
 
         vm.startPrank(deployer);
         token = new MockERC20();
-        escrow = new Escrow(address(token), recipient, EXPECTED_AMOUNT);
+        escrow = new Escrow(address(token), recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
         vm.stopPrank();
 
         token.mint(deployer, 10000e18);
