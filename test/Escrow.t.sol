@@ -59,33 +59,53 @@ contract EscrowTest is Test {
 
         vm.startPrank(deployer);
         token = new MockERC20();
+        token.mint(deployer, 10000e18);
+
+        address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
+        token.approve(futureEscrow, REWARD_AMOUNT + PAYMENT_AMOUNT);
+
         escrow = new Escrow(address(token), recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
         vm.stopPrank();
 
-        token.mint(deployer, 10000e18);
         token.mint(executor, 10000e18);
         token.mint(other, 10000e18);
     }
 
     function testConstructor() public {
-        assertEq(escrow.currentRewardAmount(), 0);
-        assertEq(escrow.currentPaymentAmount(), 0);
-        assertEq(escrow.funded(), false);
+        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT);
+        assertEq(escrow.currentPaymentAmount(), PAYMENT_AMOUNT);
+        assertEq(escrow.funded(), true);
         assertEq(escrow.expectedRecipient(), recipient);
         assertEq(escrow.expectedAmount(), EXPECTED_AMOUNT);
     }
 
     function testFund() public {
         vm.startPrank(deployer);
-        token.approve(address(escrow), REWARD_AMOUNT + PAYMENT_AMOUNT);
-        escrow.fund(REWARD_AMOUNT, PAYMENT_AMOUNT);
+
+        address futureEscrow2 = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
+        token.approve(futureEscrow2, REWARD_AMOUNT + PAYMENT_AMOUNT);
+
+        Escrow escrow2 = new Escrow(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+
+        token.approve(address(escrow2), REWARD_AMOUNT + PAYMENT_AMOUNT);
+        escrow2.fund(REWARD_AMOUNT, PAYMENT_AMOUNT);
         vm.stopPrank();
 
-        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT);
-        assertEq(escrow.originalRewardAmount(), REWARD_AMOUNT);
-        assertEq(escrow.currentPaymentAmount(), PAYMENT_AMOUNT);
-        assertEq(escrow.funded(), true);
-        assertEq(token.balanceOf(address(escrow)), REWARD_AMOUNT + PAYMENT_AMOUNT);
+        assertEq(escrow2.currentRewardAmount(), REWARD_AMOUNT);
+        assertEq(escrow2.originalRewardAmount(), REWARD_AMOUNT);
+        assertEq(escrow2.currentPaymentAmount(), PAYMENT_AMOUNT);
+        assertEq(escrow2.funded(), true);
+        assertEq(token.balanceOf(address(escrow2)), REWARD_AMOUNT + PAYMENT_AMOUNT);
+    }
+
+    function testFundZeroReward() public {
+        vm.startPrank(deployer);
+        Escrow unfundedEscrow = new Escrow(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+
+        token.approve(address(unfundedEscrow), PAYMENT_AMOUNT);
+        vm.expectRevert("Reward amount must be non-zero");
+        unfundedEscrow.fund(0, PAYMENT_AMOUNT);
+        vm.stopPrank();
     }
 
     function testFundOnlyDeployer() public {
@@ -97,18 +117,15 @@ contract EscrowTest is Test {
     }
 
     function testFundAlreadyFunded() public {
+        // Escrow is already funded in setUp, so any fund() call should revert
         vm.startPrank(deployer);
-        token.approve(address(escrow), (REWARD_AMOUNT + PAYMENT_AMOUNT) * 2);
-        escrow.fund(REWARD_AMOUNT, PAYMENT_AMOUNT);
-
+        token.approve(address(escrow), REWARD_AMOUNT + PAYMENT_AMOUNT);
         vm.expectRevert("Contract already funded");
         escrow.fund(REWARD_AMOUNT, PAYMENT_AMOUNT);
         vm.stopPrank();
     }
 
     function testBond() public {
-        _fundContract();
-
         vm.startPrank(executor);
         token.approve(address(escrow), BOND_AMOUNT);
         escrow.bond(BOND_AMOUNT);
@@ -121,16 +138,19 @@ contract EscrowTest is Test {
     }
 
     function testBondNotFunded() public {
+        // Create an unfunded escrow
+        vm.startPrank(deployer);
+        Escrow unfundedEscrow = new Escrow(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+        vm.stopPrank();
+
         vm.startPrank(executor);
-        token.approve(address(escrow), BOND_AMOUNT);
+        token.approve(address(unfundedEscrow), BOND_AMOUNT);
         vm.expectRevert("Contract not funded");
-        escrow.bond(BOND_AMOUNT);
+        unfundedEscrow.bond(BOND_AMOUNT);
         vm.stopPrank();
     }
 
     function testBondCancellationRequested() public {
-        _fundContract();
-
         vm.prank(deployer);
         escrow.requestCancellation();
 
@@ -142,8 +162,6 @@ contract EscrowTest is Test {
     }
 
     function testBondInsufficientAmount() public {
-        _fundContract();
-
         vm.startPrank(executor);
         token.approve(address(escrow), BOND_AMOUNT / 4);
         vm.expectRevert("Bond must be at least half of reward amount");
@@ -152,7 +170,6 @@ contract EscrowTest is Test {
     }
 
     function testBondAfterDeadlinePassed() public {
-        _fundContract();
         _bondExecutor();
 
         vm.warp(block.timestamp + 6 minutes);
@@ -200,7 +217,6 @@ contract EscrowTest is Test {
     }
 
     function testCollectRequiresProof() public {
-        _fundContract();
         _bondExecutor();
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
@@ -217,6 +233,9 @@ contract EscrowTest is Test {
     }
 
     function testCollectNotFunded() public {
+        vm.prank(deployer);
+        Escrow unfundedEscrow = new Escrow(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
             blockHeader: hex"",
             receiptRlp: hex"",
@@ -227,11 +246,10 @@ contract EscrowTest is Test {
 
         vm.prank(executor);
         vm.expectRevert("Contract not funded");
-        escrow.collect(dummyProof, block.number - 1);
+        unfundedEscrow.collect(dummyProof, block.number - 1);
     }
 
     function testCollectNotBondedExecutor() public {
-        _fundContract();
         _bondExecutor();
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
@@ -248,7 +266,6 @@ contract EscrowTest is Test {
     }
 
     function testCollectAfterDeadline() public {
-        _fundContract();
         _bondExecutor();
 
         vm.warp(block.timestamp + 6 minutes);
@@ -267,8 +284,6 @@ contract EscrowTest is Test {
     }
 
     function testWithdraw() public {
-        _fundContract();
-
         uint256 initialBalance = token.balanceOf(deployer);
 
         vm.prank(deployer);
@@ -282,20 +297,20 @@ contract EscrowTest is Test {
 
     function testWithdrawNotFunded() public {
         vm.prank(deployer);
+        Escrow unfundedEscrow = new Escrow(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+
+        vm.prank(deployer);
         vm.expectRevert("Contract not funded");
-        escrow.withdraw();
+        unfundedEscrow.withdraw();
     }
 
     function testWithdrawOnlyDeployer() public {
-        _fundContract();
-
         vm.prank(executor);
         vm.expectRevert("Only callable by the deployer");
         escrow.withdraw();
     }
 
     function testWithdrawWhileBonded() public {
-        _fundContract();
         _bondExecutor();
 
         vm.prank(deployer);
@@ -304,7 +319,6 @@ contract EscrowTest is Test {
     }
 
     function testWithdrawAfterBondExpired() public {
-        _fundContract();
         _bondExecutor();
 
         vm.warp(block.timestamp + 6 minutes);
@@ -316,8 +330,6 @@ contract EscrowTest is Test {
     }
 
     function testIsBonded() public {
-        _fundContract();
-
         assertFalse(escrow.is_bonded());
 
         _bondExecutor();
@@ -328,7 +340,6 @@ contract EscrowTest is Test {
     }
 
     function testDoubleBondingPrevented() public {
-        _fundContract();
         _bondExecutor();
 
         vm.startPrank(other);
@@ -339,7 +350,6 @@ contract EscrowTest is Test {
     }
 
     function testBondAfterFirstExecutorStillActive() public {
-        _fundContract();
         _bondExecutor();
 
         vm.warp(block.timestamp + 4 minutes);
@@ -355,8 +365,6 @@ contract EscrowTest is Test {
     }
 
     function testMultipleBondCycles() public {
-        _fundContract();
-
         vm.startPrank(executor);
         token.approve(address(escrow), BOND_AMOUNT);
         escrow.bond(BOND_AMOUNT);
@@ -374,8 +382,6 @@ contract EscrowTest is Test {
     }
 
     function testWithdrawAfterCollectingBonds() public {
-        _fundContract();
-
         uint256 startTime = block.timestamp;
 
         // First executor bonds at time 0
@@ -411,13 +417,6 @@ contract EscrowTest is Test {
 
         assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
         assertEq(token.balanceOf(address(escrow)), BOND_AMOUNT * 2);
-    }
-
-    function _fundContract() internal {
-        vm.startPrank(deployer);
-        token.approve(address(escrow), REWARD_AMOUNT + PAYMENT_AMOUNT);
-        escrow.fund(REWARD_AMOUNT, PAYMENT_AMOUNT);
-        vm.stopPrank();
     }
 
     function _bondExecutor() internal {

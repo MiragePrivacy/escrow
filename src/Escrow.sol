@@ -7,11 +7,7 @@ import "./ReceiptValidator.sol";
 
 interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    ) external returns (bool);
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
     function balanceOf(address account) external view returns (uint256);
 }
 
@@ -58,25 +54,23 @@ contract Escrow {
         expectedAmount = _expectedAmount;
         deployerAddress = msg.sender;
         maxBlockLookback = 256;
-        fund(_currentRewardAmount, _currentPaymentAmount);
+
+        if (_currentRewardAmount > 0 && _currentPaymentAmount > 0) {
+            fund(_currentRewardAmount, _currentPaymentAmount);
+        }
     }
 
     // takes currentRewardAmount + currentPaymentAmount from the deployer's balance from the tokenContract.
-    function fund(
-        uint256 _currentRewardAmount,
-        uint256 _currentPaymentAmount
-    ) public {
+    function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) public {
         require(msg.sender == deployerAddress, "Only callable by the deployer");
         require(!funded, "Contract already funded");
+        require(_currentRewardAmount > 0, "Reward amount must be non-zero");
+        require(_currentPaymentAmount > 0, "Payment amount must be non-zero");
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
         currentPaymentAmount = _currentPaymentAmount;
-        IERC20(tokenContract).transferFrom(
-            msg.sender,
-            address(this),
-            originalRewardAmount + currentPaymentAmount
-        );
+        IERC20(tokenContract).transferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount);
         funded = true;
     }
 
@@ -84,10 +78,7 @@ contract Escrow {
     function bond(uint256 _bondAmount) public {
         require(funded, "Contract not funded");
         require(!cancellationRequest, "Cancellation requested");
-        require(
-            _bondAmount >= currentRewardAmount / 2,
-            "Bond must be at least half of reward amount"
-        );
+        require(_bondAmount >= currentRewardAmount / 2, "Bond must be at least half of reward amount");
 
         // If deadline passed and someone is bonded, add their bond to reward
         if (executionDeadline > 0 && block.timestamp > executionDeadline) {
@@ -99,11 +90,7 @@ contract Escrow {
         // Prevent double bonding - no one can bond while another executor is actively bonded
         require(!is_bonded(), "Another executor is already bonded");
 
-        IERC20(tokenContract).transferFrom(
-            msg.sender,
-            address(this),
-            _bondAmount
-        );
+        IERC20(tokenContract).transferFrom(msg.sender, address(this), _bondAmount);
 
         bondedExecutor = msg.sender;
         executionDeadline = block.timestamp + 5 minutes;
@@ -125,74 +112,44 @@ contract Escrow {
     }
 
     // Now validates a given merkle proof against a recent block hash and checks the Transfer event's contents
-    function collect(
-        ReceiptProof calldata proof,
-        uint256 targetBlockNumber
-    ) public {
+    function collect(ReceiptProof calldata proof, uint256 targetBlockNumber) public {
         require(funded, "Contract not funded");
-        require(
-            msg.sender == bondedExecutor && is_bonded(),
-            "Only bonded executor can collect"
-        );
+        require(msg.sender == bondedExecutor && is_bonded(), "Only bonded executor can collect");
 
         // Validate target block is recent and accessible
-        require(
-            targetBlockNumber <= block.number,
-            "Target block is in the future"
-        );
-        require(
-            block.number - targetBlockNumber <= maxBlockLookback,
-            "Target block too old"
-        );
+        require(targetBlockNumber <= block.number, "Target block is in the future");
+        require(block.number - targetBlockNumber <= maxBlockLookback, "Target block too old");
 
         // Get the target block hash
         bytes32 targetBlockHash = blockhash(targetBlockNumber);
         require(targetBlockHash != bytes32(0), "Unable to retrieve block hash");
 
         // Validate block header hash matches target block
-        require(
-            keccak256(proof.blockHeader) == targetBlockHash,
-            "Block header hash mismatch"
-        );
+        require(keccak256(proof.blockHeader) == targetBlockHash, "Block header hash mismatch");
 
         // Also verify the block number in header matches target
         require(
-            BlockHeaderParser.extractBlockNumber(proof.blockHeader) ==
-                targetBlockNumber,
-            "Header block number mismatch"
+            BlockHeaderParser.extractBlockNumber(proof.blockHeader) == targetBlockNumber, "Header block number mismatch"
         );
 
         // Extract receipts root from block header
-        bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(
-            proof.blockHeader
-        );
+        bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(proof.blockHeader);
 
         // Verify receipt proof against receipts root using MPT verification
         require(
-            MPTVerifier.verifyReceiptProof(
-                proof.receiptRlp,
-                proof.proofNodes,
-                proof.receiptPath,
-                receiptsRoot
-            ),
+            MPTVerifier.verifyReceiptProof(proof.receiptRlp, proof.proofNodes, proof.receiptPath, receiptsRoot),
             "Invalid receipt MPT proof"
         );
 
         // Extract and validate the Transfer event
         require(
             ReceiptValidator.validateTransferInReceipt(
-                proof.receiptRlp,
-                proof.logIndex,
-                tokenContract,
-                expectedRecipient,
-                expectedAmount
+                proof.receiptRlp, proof.logIndex, tokenContract, expectedRecipient, expectedAmount
             ),
             "Invalid Transfer event"
         );
 
-        uint256 payout = bondAmount +
-            currentRewardAmount +
-            currentPaymentAmount;
+        uint256 payout = bondAmount + currentRewardAmount + currentPaymentAmount;
         address executor = bondedExecutor;
 
         bondedExecutor = address(0);
@@ -214,14 +171,10 @@ contract Escrow {
     function withdraw() public {
         require(funded, "Contract not funded");
         require(msg.sender == deployerAddress, "Only callable by the deployer");
-        require(
-            funded == true,
-            "The contract was not funded or has been drained already"
-        );
+        require(funded == true, "The contract was not funded or has been drained already");
         tryResetBondData();
 
-        uint256 withdrawableAmount = currentPaymentAmount +
-            originalRewardAmount;
+        uint256 withdrawableAmount = currentPaymentAmount + originalRewardAmount;
 
         funded = false;
         currentPaymentAmount = 0;
