@@ -53,32 +53,30 @@ contract EscrowMPTTest is Test {
     bytes32 constant TARGET_BLOCK_HASH = 0x490a3fc0b0c2170b55ca18ce6c73fc1af50ebe0931b525a3510c048f2b428617; // From: block_hash
 
     function testCollectWithTransferProof() public {
+        deployer = makeAddr("deployer");
         address proofTokenAddress = address(0xBe41a9EC942d5b52bE07cC7F4D7E30E10e9B652A); // From: logs[0].address
         address proofRecipient = address(0x658D9C76ff358984D6436eA11ee1eda08894C818); // From: logs[0].topics[2] (to address)
         address proofExecutor = address(0xE1A9d9C9abB872dDEF70A4d108Fd8fc3c7cE4dC4); // From: logs[0].topics[1] (from address)
 
-        MockERC20 proofToken = new MockERC20();
-
         vm.startPrank(deployer);
-        Escrow proofEscrow = new Escrow(proofTokenAddress, proofRecipient, TRANSFER_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
+
+        // Mock the token transfers for constructor funding
+        vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
+
+        Escrow proofEscrow =
+            new Escrow(proofTokenAddress, proofRecipient, TRANSFER_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
         vm.stopPrank();
 
-        console.log("Setup escrow address:", address(escrow));
         console.log("Proof escrow address:", address(proofEscrow));
         console.log("Expected amount in proof escrow:", proofEscrow.expectedAmount());
 
+        // Mock transfers for bonding and collect payout
         vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
         vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
 
-        // fund the proof escrow
-        _fundProofContract(proofEscrow, proofToken);
-
-        // mint tokens for the executor and bond
-        proofToken.mint(proofExecutor, 10000e18);
-        vm.startPrank(proofExecutor);
-        proofToken.approve(address(proofEscrow), BOND_AMOUNT);
+        // Bond as executor
+        vm.prank(proofExecutor);
         proofEscrow.bond(BOND_AMOUNT);
-        vm.stopPrank();
 
         vm.roll(TARGET_BLOCK_NUMBER + 10);
         vm.setBlockhash(TARGET_BLOCK_NUMBER, TARGET_BLOCK_HASH);
@@ -97,13 +95,5 @@ contract EscrowMPTTest is Test {
         console.log("Proved transfer from:", proofExecutor);
         console.log("To recipient:", proofRecipient);
         console.log("Amount:", TRANSFER_AMOUNT);
-    }
-
-    function _fundProofContract(Escrow _escrow, MockERC20 _token) internal {
-        vm.startPrank(deployer);
-        _token.mint(deployer, 10000e18);
-        _token.approve(address(_escrow), REWARD_AMOUNT + PAYMENT_AMOUNT);
-        _escrow.fund(REWARD_AMOUNT, PAYMENT_AMOUNT);
-        vm.stopPrank();
     }
 }
