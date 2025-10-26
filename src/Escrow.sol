@@ -160,9 +160,9 @@ contract Escrow {
         currentPaymentAmount = 0;
         currentRewardAmount = 0;
         if (block.chainid == 1) {
-          IERC20(tokenContract).transfer(executor, payout);
+            IERC20(tokenContract).transfer(executor, payout);
         } else {
-          IERC20(tokenContract).send(executor, payout);
+            IERC20(tokenContract).send(executor, payout);
         }
     }
 
