@@ -6,6 +6,7 @@ import "./MPTVerifier.sol";
 import "./ReceiptValidator.sol";
 
 interface IERC20 {
+    function send(address to, uint256 amount) external returns (bool);
     function transfer(address to, uint256 amount) external returns (bool);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
     function balanceOf(address account) external view returns (uint256);
@@ -158,7 +159,11 @@ contract Escrow {
         funded = false;
         currentPaymentAmount = 0;
         currentRewardAmount = 0;
-        IERC20(tokenContract).transfer(executor, payout);
+        if (block.chainid == 1) {
+            IERC20(tokenContract).transfer(executor, payout);
+        } else {
+            IERC20(tokenContract).send(executor, payout);
+        }
     }
 
     // checks if contract is currently bonded by verifying deadline
