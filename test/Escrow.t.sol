@@ -220,11 +220,7 @@ contract EscrowTest is Test {
         _bondExecutor();
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
-            blockHeader: hex"",
-            receiptRlp: hex"",
-            proofNodes: hex"",
-            receiptPath: hex"",
-            logIndex: 0
+            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
         });
 
         vm.prank(executor);
@@ -237,11 +233,7 @@ contract EscrowTest is Test {
         Escrow unfundedEscrow = new Escrow(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
-            blockHeader: hex"",
-            receiptRlp: hex"",
-            proofNodes: hex"",
-            receiptPath: hex"",
-            logIndex: 0
+            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
         });
 
         vm.prank(executor);
@@ -253,11 +245,7 @@ contract EscrowTest is Test {
         _bondExecutor();
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
-            blockHeader: hex"",
-            receiptRlp: hex"",
-            proofNodes: hex"",
-            receiptPath: hex"",
-            logIndex: 0
+            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
         });
 
         vm.prank(other);
@@ -271,11 +259,7 @@ contract EscrowTest is Test {
         vm.warp(block.timestamp + 6 minutes);
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
-            blockHeader: hex"",
-            receiptRlp: hex"",
-            proofNodes: hex"",
-            receiptPath: hex"",
-            logIndex: 0
+            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
         });
 
         vm.prank(executor);
