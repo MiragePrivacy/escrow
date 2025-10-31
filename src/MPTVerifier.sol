@@ -12,26 +12,51 @@ library MPTVerifier {
     using RLPParser for bytes;
 
     /**
-     * @dev Verify receipt inclusion using Merkle Patricia Trie proof
-     * @param receiptRlp RLP-encoded transaction receipt
-     * @param proofNodes RLP-encoded array of MPT proof nodes
-     * @param receiptPath RLP-encoded transaction index (key)
+     * @dev Verify one or more receipt inclusions using a shared Merkle Patricia Trie proof.
+     * @param receiptRlps RLP-encoded receipts being proven
+     * @param receiptPaths RLP-encoded transaction indices (keys) for each receipt
+     * @param proofNodes RLP-encoded array of shared MPT proof nodes
      * @param receiptsRoot Root hash of the receipts trie
-     * @return True if the proof is valid
+     * @return True if every (path, receipt) pair is proven
      */
+    function verifyReceiptMultiProof(
+        bytes[] calldata receiptRlps,
+        bytes[] calldata receiptPaths,
+        bytes calldata proofNodes,
+        bytes32 receiptsRoot
+    ) internal pure returns (bool) {
+        bytes[] memory receiptsMem = receiptRlps;
+        bytes[] memory pathsMem = receiptPaths;
+        bytes memory proofNodesMem = proofNodes;
+        return verifyReceiptMultiProofInternal(receiptsMem, pathsMem, proofNodesMem, receiptsRoot);
+    }
+
+    /**
+     * @dev Memory-based entry point used by tests or callers already working in memory.
+     */
+    function verifyReceiptMultiProofFromMemory(
+        bytes[] memory receiptRlps,
+        bytes[] memory receiptPaths,
+        bytes memory proofNodes,
+        bytes32 receiptsRoot
+    ) internal pure returns (bool) {
+        return verifyReceiptMultiProofInternal(receiptRlps, receiptPaths, proofNodes, receiptsRoot);
+    }
+
     function verifyReceiptProof(
         bytes calldata receiptRlp,
         bytes calldata proofNodes,
         bytes calldata receiptPath,
         bytes32 receiptsRoot
     ) internal pure returns (bool) {
-        // Key is the RLP-encoded tx index BYTES (unmodified)
-        bytes memory key = receiptPath;
-        // Value is EXACT receipt bytes
-        bytes memory value = receiptRlp;
-
-        // Verify MPT proof
-        return verifyProof(key, value, proofNodes, receiptsRoot);
+        bytes[] memory receipts = new bytes[](1);
+        bytes[] memory paths = new bytes[](1);
+        bytes memory singleReceipt = receiptRlp;
+        bytes memory singlePath = receiptPath;
+        receipts[0] = singleReceipt;
+        paths[0] = singlePath;
+        bytes memory proofNodesMem = proofNodes;
+        return verifyReceiptMultiProofInternal(receipts, paths, proofNodesMem, receiptsRoot);
     }
 
     /**
@@ -115,6 +140,134 @@ library MPTVerifier {
         }
 
         return false;
+    }
+
+    function decodeProofNodes(bytes memory proofNodes) private pure returns (bytes[] memory nodes) {
+        require(proofNodes.length > 0 && proofNodes[0] >= 0xc0, "Invalid proof node list");
+
+        uint256 offset;
+        if (uint8(proofNodes[0]) >= 0xf8) {
+            offset = 1 + (uint8(proofNodes[0]) - 0xf7);
+        } else {
+            offset = 1;
+        }
+
+        uint256 count = countListItems(proofNodes, offset);
+        nodes = new bytes[](count);
+
+        uint256 currentOffset = offset;
+        for (uint256 i = 0; i < count; i++) {
+            (bytes memory node, uint256 nodeLength) = proofNodes.parseItem(currentOffset);
+            nodes[i] = node;
+            currentOffset += nodeLength;
+        }
+    }
+
+    function verifyReceiptMultiProofInternal(
+        bytes[] memory receiptRlps,
+        bytes[] memory receiptPaths,
+        bytes memory proofNodes,
+        bytes32 receiptsRoot
+    ) private pure returns (bool) {
+        require(receiptRlps.length == receiptPaths.length, "Mismatched receipt inputs");
+
+        bytes[] memory nodes = decodeProofNodes(proofNodes);
+
+        for (uint256 i = 0; i < receiptRlps.length; i++) {
+            if (!verifySingleWithNodes(receiptPaths[i], receiptRlps[i], nodes, receiptsRoot)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    function verifySingleWithNodes(bytes memory key, bytes memory value, bytes[] memory nodes, bytes32 root)
+        private
+        pure
+        returns (bool)
+    {
+        bytes32 currentHash = root;
+        uint256 keyOffset = 0;
+
+        while (true) {
+            (bool found, bytes memory node) = fetchNode(nodes, currentHash);
+            if (!found) {
+                return false;
+            }
+
+            if (node.length == 0 || node[0] < 0xc0) {
+                return false;
+            }
+
+            uint256 nodeOffset = 1;
+            if (node[0] >= 0xf8) {
+                nodeOffset += uint8(node[0]) - 0xf7;
+            }
+
+            uint256 items = countListItems(node, nodeOffset);
+
+            if (items == 17) {
+                (bool success, uint256 newKeyOffset, bytes32 newHash) =
+                    processBranchNode(node, nodeOffset, key, keyOffset, value);
+                if (!success) {
+                    return false;
+                }
+                if (newHash == bytes32(0)) {
+                    return true;
+                }
+                keyOffset = newKeyOffset;
+                currentHash = newHash;
+            } else if (items == 2) {
+                (bool success, uint256 newKeyOffset, bytes32 newHash) =
+                    processLeafOrExtensionNode(node, nodeOffset, key, keyOffset, value);
+                if (!success) {
+                    return false;
+                }
+                if (newHash == bytes32(0)) {
+                    return true;
+                }
+                keyOffset = newKeyOffset;
+                currentHash = newHash;
+            } else {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    function fetchNode(bytes[] memory nodes, bytes32 hash) private pure returns (bool, bytes memory) {
+        for (uint256 i = 0; i < nodes.length; i++) {
+            bytes memory candidate = nodes[i];
+            if (keccak256(candidate) == hash) {
+                return (true, candidate);
+            }
+            if (candidate.length == 32) {
+                bytes32 direct;
+                assembly {
+                    direct := mload(add(candidate, 32))
+                }
+                if (direct == hash) {
+                    return (true, candidate);
+                }
+            }
+            if (candidate.length == 0) {
+                continue;
+            }
+            if (candidate.length < 32) {
+                bytes32 shortHash = keccak256(candidate);
+                if (shortHash == hash) {
+                    return (true, candidate);
+                }
+            }
+            if (candidate.length > 32) {
+                bytes32 shortHash2 = keccak256(candidate);
+                if (shortHash2 == hash) {
+                    return (true, candidate);
+                }
+            }
+        }
+        return (false, bytes(""));
     }
 
     /**
