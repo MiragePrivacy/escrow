@@ -174,13 +174,41 @@ contract EscrowTest is Test {
 
         vm.warp(block.timestamp + 6 minutes);
 
+        // After first bond fails, reward = 500 + 250 = 750, so minimum bond = 375
+        uint256 updatedReward = REWARD_AMOUNT + BOND_AMOUNT;
+        uint256 newBondAmount = updatedReward / 2;
+
         vm.startPrank(other);
-        token.approve(address(escrow), BOND_AMOUNT);
-        escrow.bond(BOND_AMOUNT);
+        token.approve(address(escrow), newBondAmount);
+        escrow.bond(newBondAmount);
         vm.stopPrank();
 
         assertEq(escrow.bondedExecutor(), other);
-        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT + BOND_AMOUNT);
+        assertEq(escrow.currentRewardAmount(), updatedReward);
+        assertEq(escrow.bondAmount(), newBondAmount);
+        assertEq(escrow.totalBondsDeposited(), BOND_AMOUNT);
+    }
+
+    function testBondRequiresUpdatedRewardAmount() public {
+        _bondExecutor();
+
+        vm.warp(block.timestamp + 6 minutes);
+
+        uint256 updatedReward = REWARD_AMOUNT + BOND_AMOUNT;
+        uint256 minimumRequiredBond = updatedReward / 2;
+
+        vm.startPrank(other);
+        token.approve(address(escrow), type(uint256).max);
+
+        vm.expectRevert("Bond must be at least half of reward amount");
+        escrow.bond(BOND_AMOUNT);
+
+        escrow.bond(minimumRequiredBond);
+        vm.stopPrank();
+
+        assertEq(escrow.currentRewardAmount(), updatedReward);
+        assertEq(escrow.bondAmount(), minimumRequiredBond);
+        assertEq(escrow.bondedExecutor(), other);
         assertEq(escrow.totalBondsDeposited(), BOND_AMOUNT);
     }
 
@@ -220,7 +248,11 @@ contract EscrowTest is Test {
         _bondExecutor();
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
-            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
+            blockHeader: hex"",
+            receiptRlp: hex"",
+            proofNodes: hex"",
+            receiptPath: hex"",
+            logIndex: 0
         });
 
         vm.prank(executor);
@@ -233,7 +265,11 @@ contract EscrowTest is Test {
         Escrow unfundedEscrow = new Escrow(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
-            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
+            blockHeader: hex"",
+            receiptRlp: hex"",
+            proofNodes: hex"",
+            receiptPath: hex"",
+            logIndex: 0
         });
 
         vm.prank(executor);
@@ -245,7 +281,11 @@ contract EscrowTest is Test {
         _bondExecutor();
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
-            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
+            blockHeader: hex"",
+            receiptRlp: hex"",
+            proofNodes: hex"",
+            receiptPath: hex"",
+            logIndex: 0
         });
 
         vm.prank(other);
@@ -259,7 +299,11 @@ contract EscrowTest is Test {
         vm.warp(block.timestamp + 6 minutes);
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
-            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
+            blockHeader: hex"",
+            receiptRlp: hex"",
+            proofNodes: hex"",
+            receiptPath: hex"",
+            logIndex: 0
         });
 
         vm.prank(executor);
@@ -356,13 +400,18 @@ contract EscrowTest is Test {
 
         vm.warp(block.timestamp + 6 minutes);
 
+        // After first bond fails, reward = 500 + 250 = 750, so minimum bond = 375
+        uint256 updatedReward = REWARD_AMOUNT + BOND_AMOUNT;
+        uint256 newBondAmount = updatedReward / 2;
+
         vm.startPrank(other);
-        token.approve(address(escrow), BOND_AMOUNT);
-        escrow.bond(BOND_AMOUNT);
+        token.approve(address(escrow), newBondAmount);
+        escrow.bond(newBondAmount);
         vm.stopPrank();
 
         assertEq(escrow.bondedExecutor(), other);
-        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT + BOND_AMOUNT);
+        assertEq(escrow.currentRewardAmount(), updatedReward);
+        assertEq(escrow.bondAmount(), newBondAmount);
     }
 
     function testWithdrawAfterCollectingBonds() public {
@@ -379,15 +428,20 @@ contract EscrowTest is Test {
         vm.warp(startTime + 6 minutes);
         assertFalse(escrow.is_bonded());
 
+        // After first bond fails, reward = 500 + 250 = 750, so minimum bond = 375
+        uint256 updatedReward = REWARD_AMOUNT + BOND_AMOUNT;
+        uint256 newBondAmount = updatedReward / 2;
+
         // Second executor bonds at startTime + 6 minutes
         vm.startPrank(other);
-        token.approve(address(escrow), BOND_AMOUNT);
-        escrow.bond(BOND_AMOUNT);
+        token.approve(address(escrow), newBondAmount);
+        escrow.bond(newBondAmount);
         vm.stopPrank();
         // Second deadline = (startTime + 6 minutes) + 5 minutes = startTime + 11 minutes
 
         // Verify first bond was collected
-        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT + BOND_AMOUNT);
+        assertEq(escrow.currentRewardAmount(), updatedReward);
+        assertEq(escrow.bondAmount(), newBondAmount);
         assertEq(escrow.bondedExecutor(), other);
 
         // Warp to startTime + 12 minutes (second deadline expires)
@@ -400,7 +454,8 @@ contract EscrowTest is Test {
         escrow.withdraw();
 
         assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
-        assertEq(token.balanceOf(address(escrow)), BOND_AMOUNT * 2);
+        // Escrow holds both failed bonds: first bond (250) + second bond (375)
+        assertEq(token.balanceOf(address(escrow)), BOND_AMOUNT + newBondAmount);
     }
 
     function _bondExecutor() internal {
