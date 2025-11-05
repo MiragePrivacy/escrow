@@ -247,8 +247,9 @@ contract EscrowTest is Test {
     function testCollectRequiresProof() public {
         _bondExecutor();
 
-        Escrow.ReceiptProof memory dummyProof =
-            Escrow.ReceiptProof({blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0});
+        Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
+            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
+        });
 
         vm.prank(executor);
         vm.expectRevert();
@@ -259,8 +260,9 @@ contract EscrowTest is Test {
         vm.prank(deployer);
         Escrow unfundedEscrow = new Escrow(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
 
-        Escrow.ReceiptProof memory dummyProof =
-            Escrow.ReceiptProof({blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0});
+        Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
+            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
+        });
 
         vm.prank(executor);
         vm.expectRevert("Contract not funded");
@@ -270,8 +272,9 @@ contract EscrowTest is Test {
     function testCollectNotBondedExecutor() public {
         _bondExecutor();
 
-        Escrow.ReceiptProof memory dummyProof =
-            Escrow.ReceiptProof({blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0});
+        Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
+            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
+        });
 
         vm.prank(other);
         vm.expectRevert("Only bonded executor can collect");
@@ -283,8 +286,9 @@ contract EscrowTest is Test {
 
         vm.warp(block.timestamp + 6 minutes);
 
-        Escrow.ReceiptProof memory dummyProof =
-            Escrow.ReceiptProof({blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0});
+        Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
+            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
+        });
 
         vm.prank(executor);
         vm.expectRevert("Only bonded executor can collect");
