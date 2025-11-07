@@ -79,7 +79,6 @@ contract Escrow {
     function bond(uint256 _bondAmount) public {
         require(funded, "Contract not funded");
         require(!cancellationRequest, "Cancellation requested");
-        require(_bondAmount >= currentRewardAmount / 2, "Bond must be at least half of reward amount");
 
         // If deadline passed and someone is bonded, add their bond to reward
         if (executionDeadline > 0 && block.timestamp > executionDeadline) {
@@ -90,6 +89,7 @@ contract Escrow {
 
         // Prevent double bonding - no one can bond while another executor is actively bonded
         require(!is_bonded(), "Another executor is already bonded");
+        require(_bondAmount >= currentRewardAmount / 2, "Bond must be at least half of reward amount");
 
         IERC20(tokenContract).transferFrom(msg.sender, address(this), _bondAmount);
 

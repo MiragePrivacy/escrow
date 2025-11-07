@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.30;
 
 import {Test, console} from "forge-std/Test.sol";
 import {Escrow} from "../src/Escrow.sol";
@@ -73,6 +73,7 @@ contract EscrowMPTTest is Test {
         // Mock transfers for bonding and collect payout
         vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
         vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
+        vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
 
         // Bond as executor
         vm.prank(proofExecutor);
