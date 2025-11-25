@@ -37,10 +37,10 @@ contract Escrow {
     // Based on Nomad's proof structure
     struct ReceiptProof {
         bytes blockHeader; // RLP-encoded block header
-        bytes receiptRlp; // RLP-encoded target receipt
-        bytes proofNodes; // RLP-encoded array of MPT proof nodes
-        bytes receiptPath; // RLP-encoded receipt index
-        uint256 logIndex; // Index of target log in receipt
+        bytes proofNodes; // RLP-encoded array of shared MPT proof nodes
+        bytes[] receiptPaths; // RLP-encoded receipt indices proven by the multi-proof
+        bytes[] receiptRlps; // RLP-encoded receipts corresponding to the paths
+        uint256[] logIndices; // Target log index for each receipt
     }
 
     constructor(
@@ -112,7 +112,7 @@ contract Escrow {
         cancellationRequest = false;
     }
 
-    // Now validates a given merkle proof against a recent block hash and checks the Transfer event's contents
+    // Now validates a shared receipt MPT multiproof against a recent block hash and checks the Transfer event's contents
     function collect(ReceiptProof calldata proof, uint256 targetBlockNumber) public {
         require(funded, "Contract not funded");
         require(msg.sender == bondedExecutor && is_bonded(), "Only bonded executor can collect");
@@ -136,19 +136,30 @@ contract Escrow {
         // Extract receipts root from block header
         bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(proof.blockHeader);
 
-        // Verify receipt proof against receipts root using MPT verification
-        require(
-            MPTVerifier.verifyReceiptProof(proof.receiptRlp, proof.proofNodes, proof.receiptPath, receiptsRoot),
-            "Invalid receipt MPT proof"
-        );
+        uint256 receiptCount = proof.receiptRlps.length;
+        require(receiptCount > 0, "No receipts provided");
+        require(receiptCount == proof.receiptPaths.length, "Receipt/path length mismatch");
+        require(receiptCount == proof.logIndices.length, "Receipt/log index length mismatch");
 
-        // Extract and validate the Transfer event
+        // Verify receipt multiproof against receipts root using MPT verification
         require(
-            ReceiptValidator.validateTransferInReceipt(
-                proof.receiptRlp, proof.logIndex, tokenContract, expectedRecipient, expectedAmount
-            ),
+            MPTVerifier.verifyReceiptMultiProof(proof.receiptRlps, proof.receiptPaths, proof.proofNodes, receiptsRoot),
             "Invalid Transfer event"
         );
+
+        // Extract and validate the expected Transfer event in one of the proven receipts
+        bool transferValidated = false;
+        for (uint256 i = 0; i < receiptCount; i++) {
+            if (
+                ReceiptValidator.validateTransferInReceipt(
+                    proof.receiptRlps[i], proof.logIndices[i], tokenContract, expectedRecipient, expectedAmount
+                )
+            ) {
+                transferValidated = true;
+                break;
+            }
+        }
+        require(transferValidated, "Expected Transfer event not found");
 
         uint256 payout = bondAmount + currentRewardAmount + currentPaymentAmount;
         address executor = bondedExecutor;
