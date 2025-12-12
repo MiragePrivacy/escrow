@@ -52,7 +52,12 @@ contract EscrowMPTTest is Test {
     uint256 constant TARGET_BLOCK_NUMBER = 9084468; // From: block_number
     bytes32 constant TARGET_BLOCK_HASH = 0x490a3fc0b0c2170b55ca18ce6c73fc1af50ebe0931b525a3510c048f2b428617; // From: block_hash
 
-    function testCollectWithTransferProof() public {
+    function testCollectWithTransferProof_EIP1559() public {
+        // Skip this test when on Tempo chain since it uses EIP-1559 block header
+        if (block.chainid == 42429) {
+            vm.skip(true);
+        }
+
         deployer = makeAddr("deployer");
         address proofTokenAddress = address(0xBe41a9EC942d5b52bE07cC7F4D7E30E10e9B652A); // From: logs[0].address
         address proofRecipient = address(0x658D9C76ff358984D6436eA11ee1eda08894C818); // From: logs[0].topics[2] (to address)

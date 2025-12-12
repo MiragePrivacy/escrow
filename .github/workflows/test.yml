@@ -5,9 +5,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-env:
-  FOUNDRY_PROFILE: ci
-
 jobs:
   check:
     name: Foundry project
@@ -17,24 +14,19 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
 
-      - name: Show Forge version
-        run: |
-          forge --version
+      - uses: cachix/cachix-action@v15
+        with:
+          name: devenv
 
       - name: Run Forge fmt
-        run: |
-          forge fmt --check
-        id: fmt
+        run: nix develop -c forge fmt --check
 
       - name: Run Forge build
-        run: |
-          forge build --sizes
-        id: build
+        run: nix develop -c forge build --sizes
 
       - name: Run Forge tests
-        run: |
-          forge test -vvv
-        id: test
+        run: nix develop -c forge test -vvv
