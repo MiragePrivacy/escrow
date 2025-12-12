@@ -13,7 +13,9 @@ contract ReceiptValidatorWrapper {
         address toAddress,
         uint256 expectedAmount
     ) external pure returns (bool) {
-        return ReceiptValidator.validateTransferInReceipt(receiptRlp, logIndex, tokenContract, toAddress, expectedAmount);
+        return ReceiptValidator.validateTransferInReceipt(
+            receiptRlp, logIndex, tokenContract, toAddress, expectedAmount
+        );
     }
 }
 
