@@ -5,27 +5,57 @@ import "./RLPParser.sol";
 
 /**
  * @title BlockHeaderParser
- * @dev Library for parsing Ethereum block headers
+ * @dev Library for parsing Ethereum and Tempo block headers
  * Extracts receipts root, block number, and other header fields
+ *
+ * Tempo block headers have a wrapper structure:
+ * [slot, parent_slot, extra, inner_header]
+ * where inner_header follows standard Ethereum format
  */
 library BlockHeaderParser {
     using RLPParser for bytes;
 
     /**
-     * @dev Extract block number from RLP-encoded block header
-     * @param blockHeader RLP-encoded block header
-     * @return Block number
+     * @dev Get offset to inner header (skips Tempo wrapper if present)
+     * Tempo: [slot, parent_slot, extra, inner_header] -> skip to inner_header
+     * Ethereum: header is at root level
      */
-    function extractBlockNumber(bytes calldata blockHeader) internal pure returns (uint256) {
+    function getInnerHeaderOffset(bytes calldata blockHeader) private view returns (uint256) {
         uint256 offset = 0;
 
-        // Skip RLP list prefix
+        // Skip outer RLP list prefix
         require(blockHeader[offset] >= 0xc0, "Invalid RLP list");
         if (blockHeader[offset] >= 0xf8) {
             offset += 1 + (uint8(blockHeader[offset]) - 0xf7);
         } else {
             offset += 1;
         }
+
+        if (block.chainid == 42429) {
+            // Tempo: skip first 3 fields (slot, parent_slot, extra) to get to inner header
+            for (uint256 i = 0; i < 3; i++) {
+                offset = blockHeader.skipItem(offset);
+            }
+
+            // Now skip the inner header's list prefix
+            require(blockHeader[offset] >= 0xc0, "Invalid inner header RLP list");
+            if (blockHeader[offset] >= 0xf8) {
+                offset += 1 + (uint8(blockHeader[offset]) - 0xf7);
+            } else {
+                offset += 1;
+            }
+        }
+
+        return offset;
+    }
+
+    /**
+     * @dev Extract block number from RLP-encoded block header
+     * @param blockHeader RLP-encoded block header
+     * @return Block number
+     */
+    function extractBlockNumber(bytes calldata blockHeader) internal view returns (uint256) {
+        uint256 offset = getInnerHeaderOffset(blockHeader);
 
         // Skip first 8 fields to get to block number (index 8)
         // [parentHash, sha3Uncles, miner, stateRoot, transactionsRoot, receiptsRoot, logsBloom, difficulty, number, ...]
@@ -50,22 +80,11 @@ library BlockHeaderParser {
      * @param blockHeader RLP-encoded block header
      * @return Receipts root hash
      */
-    function extractReceiptsRoot(bytes calldata blockHeader) internal pure returns (bytes32) {
-        // Block header structure:
+    function extractReceiptsRoot(bytes calldata blockHeader) internal view returns (bytes32) {
+        uint256 offset = getInnerHeaderOffset(blockHeader);
+
+        // Skip first 5 fields to get to receiptsRoot (index 5)
         // [parentHash, sha3Uncles, miner, stateRoot, transactionsRoot, receiptsRoot, ...]
-        // receiptsRoot is at index 5
-
-        uint256 offset = 0;
-
-        // Skip RLP list prefix
-        require(blockHeader[offset] >= 0xc0, "Invalid RLP list");
-        if (blockHeader[offset] >= 0xf8) {
-            offset += 1 + (uint8(blockHeader[offset]) - 0xf7);
-        } else {
-            offset += 1;
-        }
-
-        // Skip first 5 fields to get to receiptsRoot
         for (uint256 i = 0; i < 5; i++) {
             offset = blockHeader.skipItem(offset);
         }
