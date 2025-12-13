@@ -159,7 +159,9 @@ contract Escrow {
         funded = false;
         currentPaymentAmount = 0;
         currentRewardAmount = 0;
-        if (block.chainid == 1) {
+        // Use transfer() on Ethereum mainnet (1) and Tempo (42429)
+        // Other chains (e.g., Mirage) use send()
+        if (block.chainid == 1 || block.chainid == 42429) {
             IERC20(tokenContract).transfer(executor, payout);
         } else {
             IERC20(tokenContract).send(executor, payout);
