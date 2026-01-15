@@ -73,6 +73,7 @@ contract Escrow {
     function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) public {
         require(msg.sender == deployerAddress, "Only callable by the deployer");
         require(!funded, "Contract already funded");
+        require(tokenContract != address(0), "Use fundNative for native ETH");
         require(_currentRewardAmount > 0, "Reward amount must be non-zero");
         require(_currentPaymentAmount > 0, "Payment amount must be non-zero");
 
@@ -83,9 +84,24 @@ contract Escrow {
         funded = true;
     }
 
+    function fundNative(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) public payable {
+        require(msg.sender == deployerAddress, "Only callable by the deployer");
+        require(!funded, "Contract already funded");
+        require(tokenContract == address(0), "Use fund for ERC20");
+        require(_currentRewardAmount > 0, "Reward amount must be non-zero");
+        require(_currentPaymentAmount > 0, "Payment amount must be non-zero");
+        require(msg.value == _currentRewardAmount + _currentPaymentAmount, "Incorrect ETH amount");
+
+        currentRewardAmount = _currentRewardAmount;
+        originalRewardAmount = _currentRewardAmount;
+        currentPaymentAmount = _currentPaymentAmount;
+        funded = true;
+    }
+
     // takes _bondAmount from the caller's balance of the tokenContract. The bondstatus is now bonded, execution deadline is current block timestamp + 5 minutes. Sets bondedexecutor to the caller. Will only accept a bond if the cancellationrequest is set to false, and no one is bonded.
     function bond(uint256 _bondAmount) public {
         require(funded, "Contract not funded");
+        require(tokenContract != address(0), "Use bondNative for native ETH");
         require(!cancellationRequest, "Cancellation requested");
 
         // If deadline passed and someone is bonded, add their bond to reward
@@ -106,6 +122,25 @@ contract Escrow {
         bondAmount = _bondAmount;
     }
 
+    function bondNative() public payable {
+        require(funded, "Contract not funded");
+        require(tokenContract == address(0), "Use bond for ERC20");
+        require(!cancellationRequest, "Cancellation requested");
+
+        if (executionDeadline > 0 && block.timestamp > executionDeadline) {
+            currentRewardAmount += bondAmount;
+            totalBondsDeposited += bondAmount;
+            tryResetBondData();
+        }
+
+        require(!is_bonded(), "Another executor is already bonded");
+        require(msg.value >= currentRewardAmount / 2, "Bond must be at least half of reward amount");
+
+        bondedExecutor = msg.sender;
+        executionDeadline = block.timestamp + 5 minutes;
+        bondAmount = msg.value;
+    }
+
     // only deployer can call this. will set the cancellation request to true.
     // when the cancellation is requested, the bonded executor may still finish their job and collect, but no new executor is accepted after the current bonded one.
     function requestCancellation() public {
@@ -122,6 +157,7 @@ contract Escrow {
 
     // Validates a given merkle proof against a recent block hash and checks the Transfer event's contents
     function collect(ReceiptProof calldata proof, uint256 targetBlockNumber) public {
+        require(tokenContract != address(0), "Use collectNative for native ETH");
         _validateBlockHeader(proof.blockHeader, targetBlockNumber);
 
         // Extract receipts root and verify receipt inclusion
@@ -144,6 +180,7 @@ contract Escrow {
 
     // Validates a given merkle proof for native ETH transfer by checking transaction fields directly
     function collectNative(TransactionProof calldata proof, uint256 targetBlockNumber) public {
+        require(tokenContract == address(0), "Use collect for ERC20");
         _validateBlockHeader(proof.blockHeader, targetBlockNumber);
 
         // Extract transactions root and verify transaction inclusion
@@ -159,7 +196,7 @@ contract Escrow {
             "Invalid native transfer"
         );
 
-        _payout();
+        _payoutNative();
     }
 
     function _validateBlockHeader(bytes calldata blockHeader, uint256 targetBlockNumber) internal view {
@@ -194,6 +231,21 @@ contract Escrow {
         }
     }
 
+    function _payoutNative() internal {
+        uint256 payout = bondAmount + currentRewardAmount + currentPaymentAmount;
+        address executor = bondedExecutor;
+
+        bondedExecutor = address(0);
+        bondAmount = 0;
+        executionDeadline = 0;
+        funded = false;
+        currentPaymentAmount = 0;
+        currentRewardAmount = 0;
+
+        (bool success,) = executor.call{value: payout}("");
+        require(success, "ETH transfer failed");
+    }
+
     // checks if contract is currently bonded by verifying deadline
     function is_bonded() public view returns (bool) {
         return executionDeadline > 0 && block.timestamp <= executionDeadline;
@@ -203,8 +255,8 @@ contract Escrow {
     // only if the contract is not currently bonded (or the execution deadline has passed)
     function withdraw() public {
         require(funded, "Contract not funded");
+        require(tokenContract != address(0), "Use withdrawNative for native ETH");
         require(msg.sender == deployerAddress, "Only callable by the deployer");
-        require(funded == true, "The contract was not funded or has been drained already");
         tryResetBondData();
 
         uint256 withdrawableAmount = currentPaymentAmount + originalRewardAmount;
@@ -216,6 +268,24 @@ contract Escrow {
         require(withdrawableAmount > 0, "No withdrawable funds");
 
         IERC20(tokenContract).transfer(msg.sender, withdrawableAmount);
+    }
+
+    function withdrawNative() public {
+        require(funded, "Contract not funded");
+        require(tokenContract == address(0), "Use withdraw for ERC20");
+        require(msg.sender == deployerAddress, "Only callable by the deployer");
+        tryResetBondData();
+
+        uint256 withdrawableAmount = currentPaymentAmount + originalRewardAmount;
+
+        funded = false;
+        currentPaymentAmount = 0;
+        currentRewardAmount = 0;
+
+        require(withdrawableAmount > 0, "No withdrawable funds");
+
+        (bool success,) = msg.sender.call{value: withdrawableAmount}("");
+        require(success, "ETH transfer failed");
     }
 
     function tryResetBondData() internal {
