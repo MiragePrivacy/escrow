@@ -43,6 +43,14 @@ contract Escrow {
         uint256 logIndex; // Index of target log in receipt
     }
 
+    // Proof structure for native ETH transfers
+    struct TransactionProof {
+        bytes blockHeader; // RLP-encoded block header
+        bytes transactionRlp; // RLP-encoded target transaction
+        bytes proofNodes; // RLP-encoded array of MPT proof nodes
+        bytes transactionPath; // RLP-encoded transaction index
+    }
+
     constructor(
         address _tokenContract,
         address _expectedRecipient,
@@ -112,37 +120,18 @@ contract Escrow {
         cancellationRequest = false;
     }
 
-    // Now validates a given merkle proof against a recent block hash and checks the Transfer event's contents
+    // Validates a given merkle proof against a recent block hash and checks the Transfer event's contents
     function collect(ReceiptProof calldata proof, uint256 targetBlockNumber) public {
-        require(funded, "Contract not funded");
-        require(msg.sender == bondedExecutor && is_bonded(), "Only bonded executor can collect");
+        _validateBlockHeader(proof.blockHeader, targetBlockNumber);
 
-        // Validate target block is recent and accessible
-        require(targetBlockNumber <= block.number, "Target block is in the future");
-        require(block.number - targetBlockNumber <= maxBlockLookback, "Target block too old");
-
-        // Get the target block hash
-        bytes32 targetBlockHash = blockhash(targetBlockNumber);
-        require(targetBlockHash != bytes32(0), "Unable to retrieve block hash");
-
-        // Validate block header hash matches target block
-        require(keccak256(proof.blockHeader) == targetBlockHash, "Block header hash mismatch");
-
-        // Also verify the block number in header matches target
-        require(
-            BlockHeaderParser.extractBlockNumber(proof.blockHeader) == targetBlockNumber, "Header block number mismatch"
-        );
-
-        // Extract receipts root from block header
+        // Extract receipts root and verify receipt inclusion
         bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(proof.blockHeader);
-
-        // Verify receipt proof against receipts root using MPT verification
         require(
             MPTVerifier.verifyReceiptProof(proof.receiptRlp, proof.proofNodes, proof.receiptPath, receiptsRoot),
             "Invalid receipt MPT proof"
         );
 
-        // Extract and validate the Transfer event
+        // Validate the Transfer event
         require(
             ReceiptValidator.validateTransferInReceipt(
                 proof.receiptRlp, proof.logIndex, tokenContract, expectedRecipient, expectedAmount
@@ -150,6 +139,44 @@ contract Escrow {
             "Invalid Transfer event"
         );
 
+        _payout();
+    }
+
+    // Validates a given merkle proof for native ETH transfer by checking transaction fields directly
+    function collectNative(TransactionProof calldata proof, uint256 targetBlockNumber) public {
+        _validateBlockHeader(proof.blockHeader, targetBlockNumber);
+
+        // Extract transactions root and verify transaction inclusion
+        bytes32 transactionsRoot = BlockHeaderParser.extractTransactionsRoot(proof.blockHeader);
+        require(
+            MPTVerifier.verifyReceiptProof(proof.transactionRlp, proof.proofNodes, proof.transactionPath, transactionsRoot),
+            "Invalid transaction MPT proof"
+        );
+
+        // Validate the native ETH transfer (to and value fields)
+        require(
+            ReceiptValidator.validateNativeTransfer(proof.transactionRlp, expectedRecipient, expectedAmount),
+            "Invalid native transfer"
+        );
+
+        _payout();
+    }
+
+    function _validateBlockHeader(bytes calldata blockHeader, uint256 targetBlockNumber) internal view {
+        require(funded, "Contract not funded");
+        require(msg.sender == bondedExecutor && is_bonded(), "Only bonded executor can collect");
+        require(targetBlockNumber <= block.number, "Target block is in the future");
+        require(block.number - targetBlockNumber <= maxBlockLookback, "Target block too old");
+
+        bytes32 targetBlockHash = blockhash(targetBlockNumber);
+        require(targetBlockHash != bytes32(0), "Unable to retrieve block hash");
+        require(keccak256(blockHeader) == targetBlockHash, "Block header hash mismatch");
+        require(
+            BlockHeaderParser.extractBlockNumber(blockHeader) == targetBlockNumber, "Header block number mismatch"
+        );
+    }
+
+    function _payout() internal {
         uint256 payout = bondAmount + currentRewardAmount + currentPaymentAmount;
         address executor = bondedExecutor;
 
@@ -159,8 +186,7 @@ contract Escrow {
         funded = false;
         currentPaymentAmount = 0;
         currentRewardAmount = 0;
-        // Use transfer() on Ethereum mainnet (1) and Tempo (42429)
-        // Other chains (e.g., Mirage) use send()
+
         if (block.chainid == 1 || block.chainid == 42429) {
             IERC20(tokenContract).transfer(executor, payout);
         } else {
