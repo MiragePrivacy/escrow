@@ -127,7 +127,7 @@ contract EscrowMPTTest is Test {
             proofRecipient,
             expectedAmount,
             0, // reward - defer to fundNative
-            0  // payment - defer to fundNative
+            0 // payment - defer to fundNative
         );
 
         // Fund the escrow with ETH

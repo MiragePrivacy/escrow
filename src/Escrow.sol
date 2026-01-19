@@ -186,7 +186,9 @@ contract Escrow {
         // Extract transactions root and verify transaction inclusion
         bytes32 transactionsRoot = BlockHeaderParser.extractTransactionsRoot(proof.blockHeader);
         require(
-            MPTVerifier.verifyReceiptProof(proof.transactionRlp, proof.proofNodes, proof.transactionPath, transactionsRoot),
+            MPTVerifier.verifyReceiptProof(
+                proof.transactionRlp, proof.proofNodes, proof.transactionPath, transactionsRoot
+            ),
             "Invalid transaction MPT proof"
         );
 
@@ -208,9 +210,7 @@ contract Escrow {
         bytes32 targetBlockHash = blockhash(targetBlockNumber);
         require(targetBlockHash != bytes32(0), "Unable to retrieve block hash");
         require(keccak256(blockHeader) == targetBlockHash, "Block header hash mismatch");
-        require(
-            BlockHeaderParser.extractBlockNumber(blockHeader) == targetBlockNumber, "Header block number mismatch"
-        );
+        require(BlockHeaderParser.extractBlockNumber(blockHeader) == targetBlockNumber, "Header block number mismatch");
     }
 
     function _payout() internal {

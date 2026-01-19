@@ -234,22 +234,22 @@ library ReceiptValidator {
     /**
      * @dev Validate native ETH transfer by checking tx 'to' and 'value' fields
      */
-    function validateNativeTransfer(
-        bytes calldata txRlp,
-        address expectedRecipient,
-        uint256 expectedAmount
-    ) internal pure returns (bool) {
+    function validateNativeTransfer(bytes calldata txRlp, address expectedRecipient, uint256 expectedAmount)
+        internal
+        pure
+        returns (bool)
+    {
         uint256 offset = 0;
 
         // Skip type prefix for typed transactions (EIP-2718)
-        uint256 toIndex = 3;  // Legacy: [nonce, gasPrice, gasLimit, to, value, ...]
+        uint256 toIndex = 3; // Legacy: [nonce, gasPrice, gasLimit, to, value, ...]
         if (txRlp.length > 0 && uint8(txRlp[0]) < 0x80) {
             uint8 txType = uint8(txRlp[0]);
             offset = 1;
             if (txType == 0x01) {
-                toIndex = 4;  // EIP-2930: [chainId, nonce, gasPrice, gasLimit, to, value, ...]
+                toIndex = 4; // EIP-2930: [chainId, nonce, gasPrice, gasLimit, to, value, ...]
             } else if (txType == 0x02) {
-                toIndex = 5;  // EIP-1559: [chainId, nonce, maxPriorityFee, maxFee, gasLimit, to, value, ...]
+                toIndex = 5; // EIP-1559: [chainId, nonce, maxPriorityFee, maxFee, gasLimit, to, value, ...]
             } else {
                 revert("Unsupported tx type");
             }
@@ -257,9 +257,7 @@ library ReceiptValidator {
 
         // Skip list prefix
         require(uint8(txRlp[offset]) >= 0xc0, "Invalid tx RLP");
-        offset += uint8(txRlp[offset]) >= 0xf8
-            ? 1 + (uint8(txRlp[offset]) - 0xf7)
-            : 1;
+        offset += uint8(txRlp[offset]) >= 0xf8 ? 1 + (uint8(txRlp[offset]) - 0xf7) : 1;
 
         // Skip to 'to' field
         for (uint256 i = 0; i < toIndex; i++) {
