@@ -244,8 +244,15 @@ library ReceiptValidator {
         // Skip type prefix for typed transactions (EIP-2718)
         uint256 toIndex = 3;  // Legacy: [nonce, gasPrice, gasLimit, to, value, ...]
         if (txRlp.length > 0 && uint8(txRlp[0]) < 0x80) {
+            uint8 txType = uint8(txRlp[0]);
             offset = 1;
-            toIndex = 4;  // EIP-2930/1559: [chainId, nonce, ..., to, value, ...]
+            if (txType == 0x01) {
+                toIndex = 4;  // EIP-2930: [chainId, nonce, gasPrice, gasLimit, to, value, ...]
+            } else if (txType == 0x02) {
+                toIndex = 5;  // EIP-1559: [chainId, nonce, maxPriorityFee, maxFee, gasLimit, to, value, ...]
+            } else {
+                revert("Unsupported tx type");
+            }
         }
 
         // Skip list prefix

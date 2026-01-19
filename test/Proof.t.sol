@@ -102,4 +102,62 @@ contract EscrowMPTTest is Test {
         console.log("To recipient:", proofRecipient);
         console.log("Amount:", TRANSFER_AMOUNT);
     }
+
+    function testCollectNativeWithTransactionProof_EIP1559() public {
+        // Skip this test when on Tempo chain since it uses EIP-1559 block header
+        if (block.chainid == 42429) {
+            vm.skip(true);
+        }
+
+        deployer = makeAddr("deployer");
+
+        // From the proof data
+        uint256 targetBlockNumber = 10080186;
+        bytes32 targetBlockHash = 0x3cc791aebe19951e540f697d14544ef4ff889d1505c1d1c69cd60aa27ca626bd;
+        address proofRecipient = address(0x3C86ee0028788FCeA3d1c0C486D3794254ADcAFC);
+        uint256 expectedAmount = 1000000000000000; // 0.001 ETH
+
+        vm.deal(deployer, 10 ether);
+        vm.startPrank(deployer);
+
+        // Create native ETH escrow (tokenContract = address(0))
+        // Pass 0, 0 to defer funding (constructor auto-calls fund() if non-zero)
+        Escrow proofEscrow = new Escrow(
+            address(0), // Native ETH
+            proofRecipient,
+            expectedAmount,
+            0, // reward - defer to fundNative
+            0  // payment - defer to fundNative
+        );
+
+        // Fund the escrow with ETH
+        proofEscrow.fundNative{value: 1 ether}(0.5 ether, 0.5 ether);
+        vm.stopPrank();
+
+        console.log("Native proof escrow address:", address(proofEscrow));
+        console.log("Expected amount:", proofEscrow.expectedAmount());
+
+        // Bond as executor (any address can be executor for native transfers)
+        address executor = makeAddr("executor");
+        vm.deal(executor, 1 ether);
+        vm.prank(executor);
+        proofEscrow.bondNative{value: 0.25 ether}();
+
+        vm.roll(targetBlockNumber + 10);
+        vm.setBlockhash(targetBlockNumber, targetBlockHash);
+
+        Escrow.TransactionProof memory proof = Escrow.TransactionProof({
+            blockHeader: hex"f9028ca05d27c0235746b1575fcbb7230c9157b875b302ed0931ecbd1a7026d75d178951a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d493479413cb6ae34a13a0977f4d7101ebc24b87bb23f0d5a06bdc3a3c9dc98fe7ebb4fe9082edac759a3ea7132614fe7754dd41fea5a4fa90a001b53883993e8eccd22fbb47f79fdd68adef92cef4f3c00868a297421d93c261a0f1b65883c9c32b13324cd66f9e1e947086371feb084530234d7df768b0605dabb9010024a55c644a01804102b0d80445f30048d809b208a1ee8448c2c298a6c006e40b1fb07f4701c678492a61714610a48899003ebb0c7a89ae681d3093e8bc370210da2917020f80020a10a4148a1b1c467011f1184268c622b1208a0208809384b50a260099e25d05f8222647680335295956490cc13e3340ce1044a034a9286dc383c7048b193df034e60b27c9079881913340d9d1024db0801024625194888dc94249a105b2005700c70305df1111009c4c4214d380028c06997587000e677380428030fe6323413af6c784062b0415aa5010238804d533739ac060537012e06e53d421cd90f04721d8a71c02b40449047a4e0e4c4af24aca0f21665a84092069808399cfba840392a22084019f8bd184696e92d49f496c6c756d696e61746520446d6f63726174697a6520447374726962757465a09ad125b48a1761a7d7ed324b33aef35fe1536aa73909cd4733b036861810ed0888000000000000000084404ed89ea0e05153307bafe9d6b862385189e7a77174ca9a83051dac038f063cbdc469639383220000840c8e6a1ba0ad40631c80a294c2d0ba3b3436549c51c1fb73fc3e8b907ca9cf39f6085bf7cca0e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            transactionRlp: hex"02f87483aa36a780844384d5138491fda78e825208943c86ee0028788fcea3d1c0c486d3794254adcafc87038d7ea4c6800080c080a0d075a8721103d76ce07a65bffe86a87ceaaef9e7240493f9873fbcacf1f31139a04d1b5493b7cf831ff79ee91221d0e1cb79b71f6652f95d64c87cd6ec8dc4bdba",
+            proofNodes: hex"f9038ab8f3f8f1a0ea417aa3337d89aa308e729b85e534018eeb0d27e45e30f4596a5c828522d5d5a0b99463d0ace6bbff8debb499d30e69915be4f1825e02467ffca41db658458290a073c7342c76ac2bbfac25b013b99b05813071db94149be92569d11d532ff8a1a0a06a16804a4598f6943641b7289d8867f808f3812a939b485be62a09235c49adf5a0cf56ce4669a2501831bd6f7178dd719bc9596a4ac311ae9952274862ed85ba5ea044763a1b4a817a7486aeccb75044f19560e4dc8de5eba8cb298da17b328aa2438080a010dacdfc0730fae51f072b9b148eb522f61428237d506cf73152107ffabe24c98080808080808080b90214f90211a0603bf2b689978c2767949a1b012dd6ede8607d27cdd464e26ecd3de4212f9569a07544470cdd5d4343bc85745dc65652d4de077dc1129a0738a5269635871eca75a091ba79b0a28b4cb8dee169259d48395ebc22810a37c71cb2d57aec65edad8a9aa0b3cabd9bdc55289f0833c3ecd9311aca117db9d12582dcad0a2f4ee37875cb19a045d6138c33c09806ca501e4600e375fba3ac7a35d8aa7a9377138963bacfc018a02774c2a4b03fbda71df1b988dfff4c94ee39dfd329a49f4772ad52780b5ea167a0edcdbfcda677db06341d7bfebf7a0865fe563e3e5aad8417dcafbb4eab37e067a0d75cd00b4236f58b7274e5db82d900a9f523af7a0f12dcc05350944000d52e8da049845e16ecad3608ef413e979ff4fba131d86bb6e0b89dbc710c384c62d5f827a026d0467d35c273a5f179349ae7af07d75dc12f2a3a8341794f86b2c4b8b8b36ba0d6a5f31d7e040a3a47b335ae9a80af8c7d383fa3c513cca5b19706d741428f46a0b2b9bdbe1e7692aef9414fb1bf5fc5a2e353a4fa9f825f9c2a4831eccf282312a02a07787d1f9daffdf47af66182257c6e2393b7074714b98a803b14759784e989a0e40d552606d64fa5db611583741b00d2da7c070f0f9f682140b0d4f29d1ad5e0a0a74019f48d4f133858c9796a6985901e0ebb337206d416a646190cb5a2063f18a00c9e711239b2154c29f66edce7f9db2aecf8c8d617dfbddd6dc66d41807aa8ab80b87cf87a20b87702f87483aa36a780844384d5138491fda78e825208943c86ee0028788fcea3d1c0c486d3794254adcafc87038d7ea4c6800080c080a0d075a8721103d76ce07a65bffe86a87ceaaef9e7240493f9873fbcacf1f31139a04d1b5493b7cf831ff79ee91221d0e1cb79b71f6652f95d64c87cd6ec8dc4bdba",
+            transactionPath: hex"3d"
+        });
+
+        vm.prank(executor);
+        proofEscrow.collectNative(proof, targetBlockNumber);
+
+        console.log("Proved native ETH transfer");
+        console.log("To recipient:", proofRecipient);
+        console.log("Amount:", expectedAmount);
+    }
 }
