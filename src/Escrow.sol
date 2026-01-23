@@ -57,7 +57,7 @@ contract Escrow {
         uint256 _expectedAmount,
         uint256 _currentRewardAmount,
         uint256 _currentPaymentAmount
-    ) {
+    ) payable {
         tokenContract = _tokenContract;
         expectedRecipient = _expectedRecipient;
         expectedAmount = _expectedAmount;
@@ -65,7 +65,17 @@ contract Escrow {
         maxBlockLookback = 256;
 
         if (_currentRewardAmount > 0 && _currentPaymentAmount > 0) {
-            fund(_currentRewardAmount, _currentPaymentAmount);
+            if (_tokenContract == address(0)) {
+                // Native ETH escrow - fund directly from msg.value
+                require(msg.value == _currentRewardAmount + _currentPaymentAmount, "Incorrect ETH amount");
+                currentRewardAmount = _currentRewardAmount;
+                originalRewardAmount = _currentRewardAmount;
+                currentPaymentAmount = _currentPaymentAmount;
+                funded = true;
+            } else {
+                // ERC20 escrow
+                fund(_currentRewardAmount, _currentPaymentAmount);
+            }
         }
     }
 
