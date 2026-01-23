@@ -43,12 +43,14 @@ contract Escrow {
         uint256 logIndex; // Index of target log in receipt
     }
 
-    // Proof structure for native ETH transfers
-    struct TransactionProof {
+    // Proof structure for native ETH transfers (requires both tx and receipt)
+    struct NativeTransferProof {
         bytes blockHeader; // RLP-encoded block header
-        bytes transactionRlp; // RLP-encoded target transaction
-        bytes proofNodes; // RLP-encoded array of MPT proof nodes
-        bytes transactionPath; // RLP-encoded transaction index
+        bytes transactionRlp; // RLP-encoded target transaction (for to/value validation)
+        bytes txProofNodes; // MPT proof nodes for transaction inclusion
+        bytes receiptRlp; // RLP-encoded receipt (for status validation)
+        bytes receiptProofNodes; // MPT proof nodes for receipt inclusion
+        bytes path; // RLP-encoded index (same for both tx and receipt)
     }
 
     constructor(
@@ -188,19 +190,28 @@ contract Escrow {
         _payout();
     }
 
-    // Validates a given merkle proof for native ETH transfer by checking transaction fields directly
-    function collectNative(TransactionProof calldata proof, uint256 targetBlockNumber) public {
+    // Validates native ETH transfer by proving both transaction inclusion (for to/value)
+    // and receipt inclusion (for status == 1, i.e., successful execution)
+    function collectNative(NativeTransferProof calldata proof, uint256 targetBlockNumber) public {
         require(tokenContract == address(0), "Use collect for ERC20");
         _validateBlockHeader(proof.blockHeader, targetBlockNumber);
 
-        // Extract transactions root and verify transaction inclusion
+        // Verify transaction inclusion in transactions trie
         bytes32 transactionsRoot = BlockHeaderParser.extractTransactionsRoot(proof.blockHeader);
         require(
-            MPTVerifier.verifyReceiptProof(
-                proof.transactionRlp, proof.proofNodes, proof.transactionPath, transactionsRoot
-            ),
+            MPTVerifier.verifyReceiptProof(proof.transactionRlp, proof.txProofNodes, proof.path, transactionsRoot),
             "Invalid transaction MPT proof"
         );
+
+        // Verify receipt inclusion in receipts trie
+        bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(proof.blockHeader);
+        require(
+            MPTVerifier.verifyReceiptProof(proof.receiptRlp, proof.receiptProofNodes, proof.path, receiptsRoot),
+            "Invalid receipt MPT proof"
+        );
+
+        // Validate transaction succeeded (status == 1)
+        require(ReceiptValidator.validateReceiptStatus(proof.receiptRlp), "Transaction failed (status != 1)");
 
         // Validate the native ETH transfer (to and value fields)
         require(

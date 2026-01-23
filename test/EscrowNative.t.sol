@@ -215,11 +215,13 @@ contract EscrowNativeTest is Test {
     function testCollectNativeRequiresProof() public {
         _bondExecutor();
 
-        Escrow.TransactionProof memory dummyProof = Escrow.TransactionProof({
+        Escrow.NativeTransferProof memory dummyProof = Escrow.NativeTransferProof({
             blockHeader: hex"",
             transactionRlp: hex"",
-            proofNodes: hex"",
-            transactionPath: hex""
+            txProofNodes: hex"",
+            receiptRlp: hex"",
+            receiptProofNodes: hex"",
+            path: hex""
         });
 
         vm.prank(executor);
@@ -231,11 +233,13 @@ contract EscrowNativeTest is Test {
         vm.prank(deployer);
         Escrow unfundedEscrow = new Escrow(address(0), recipient, EXPECTED_AMOUNT, 0, 0);
 
-        Escrow.TransactionProof memory dummyProof = Escrow.TransactionProof({
+        Escrow.NativeTransferProof memory dummyProof = Escrow.NativeTransferProof({
             blockHeader: hex"",
             transactionRlp: hex"",
-            proofNodes: hex"",
-            transactionPath: hex""
+            txProofNodes: hex"",
+            receiptRlp: hex"",
+            receiptProofNodes: hex"",
+            path: hex""
         });
 
         vm.prank(executor);
@@ -246,11 +250,13 @@ contract EscrowNativeTest is Test {
     function testCollectNativeNotBondedExecutor() public {
         _bondExecutor();
 
-        Escrow.TransactionProof memory dummyProof = Escrow.TransactionProof({
+        Escrow.NativeTransferProof memory dummyProof = Escrow.NativeTransferProof({
             blockHeader: hex"",
             transactionRlp: hex"",
-            proofNodes: hex"",
-            transactionPath: hex""
+            txProofNodes: hex"",
+            receiptRlp: hex"",
+            receiptProofNodes: hex"",
+            path: hex""
         });
 
         vm.prank(other);
@@ -263,11 +269,13 @@ contract EscrowNativeTest is Test {
 
         vm.warp(block.timestamp + 6 minutes);
 
-        Escrow.TransactionProof memory dummyProof = Escrow.TransactionProof({
+        Escrow.NativeTransferProof memory dummyProof = Escrow.NativeTransferProof({
             blockHeader: hex"",
             transactionRlp: hex"",
-            proofNodes: hex"",
-            transactionPath: hex""
+            txProofNodes: hex"",
+            receiptRlp: hex"",
+            receiptProofNodes: hex"",
+            path: hex""
         });
 
         vm.prank(executor);
@@ -450,5 +458,67 @@ contract EscrowNativeTest is Test {
     function _bondExecutor() internal {
         vm.prank(executor);
         escrow.bondNative{value: BOND_AMOUNT}();
+    }
+}
+
+// Helper contract to test ReceiptValidator with calldata
+import {ReceiptValidator} from "../src/ReceiptValidator.sol";
+
+contract ReceiptValidatorWrapper {
+    function validateReceiptStatus(bytes calldata receiptRlp) external pure returns (bool) {
+        return ReceiptValidator.validateReceiptStatus(receiptRlp);
+    }
+}
+
+contract ReceiptValidatorTest is Test {
+    ReceiptValidatorWrapper wrapper;
+
+    function setUp() public {
+        wrapper = new ReceiptValidatorWrapper();
+    }
+
+    // Test that successful transaction receipt (status = 1) passes validation
+    function testValidateReceiptStatusSuccess() public view {
+        // EIP-1559 receipt with status = 1: type(02) + rlp([status=01, cumulativeGasUsed, logsBloom, logs])
+        // Real receipt from Proof.t.sol - this has status=0x01 (success)
+        bytes memory successReceipt =
+            hex"02f901a801840114e0a3b9010000000000000000000000000000000880000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000010000000000000200000000000004000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000001000000000000000000000000000f89df89b94be41a9ec942d5b52be07cc7f4d7e30e10e9b652af863a0ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3efa0000000000000000000000000e1a9d9c9abb872ddef70a4d108fd8fc3c7ce4dc4a0000000000000000000000000658d9c76ff358984d6436ea11ee1eda08894c818a000000000000000000000000000000000000000000000000000000000017d7840";
+
+        // Should not revert - status byte after list prefix is 0x01 (success)
+        bool result = wrapper.validateReceiptStatus(successReceipt);
+        assertTrue(result);
+    }
+
+    // Test that failed transaction receipt (status = 0) fails validation
+    function testValidateReceiptStatusFailure() public {
+        // Same receipt but with status=0x80 (empty = 0 = failed) instead of 0x01
+        // Changed byte at position 5 (after 02 f9 01 a8) from 01 to 80
+        bytes memory failedReceipt =
+            hex"02f901a880840114e0a3b9010000000000000000000000000000000880000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000010000000000000200000000000004000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000001000000000000000000000000000f89df89b94be41a9ec942d5b52be07cc7f4d7e30e10e9b652af863a0ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3efa0000000000000000000000000e1a9d9c9abb872ddef70a4d108fd8fc3c7ce4dc4a0000000000000000000000000658d9c76ff358984d6436ea11ee1eda08894c818a000000000000000000000000000000000000000000000000000000000017d7840";
+
+        // Should revert with "Receipt status is not success"
+        vm.expectRevert("Receipt status is not success");
+        wrapper.validateReceiptStatus(failedReceipt);
+    }
+
+    // Test legacy receipt format (no type prefix)
+    function testValidateReceiptStatusLegacySuccess() public view {
+        // Legacy receipt (no type prefix) with status = 1
+        // Same structure but without the 02 type prefix
+        bytes memory legacySuccessReceipt =
+            hex"f901a801840114e0a3b9010000000000000000000000000000000880000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000010000000000000200000000000004000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000001000000000000000000000000000f89df89b94be41a9ec942d5b52be07cc7f4d7e30e10e9b652af863a0ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3efa0000000000000000000000000e1a9d9c9abb872ddef70a4d108fd8fc3c7ce4dc4a0000000000000000000000000658d9c76ff358984d6436ea11ee1eda08894c818a000000000000000000000000000000000000000000000000000000000017d7840";
+
+        bool result = wrapper.validateReceiptStatus(legacySuccessReceipt);
+        assertTrue(result);
+    }
+
+    // Test legacy receipt format with failed status
+    function testValidateReceiptStatusLegacyFailure() public {
+        // Legacy receipt (no type prefix) with status = 0 (0x80 = empty)
+        bytes memory legacyFailedReceipt =
+            hex"f901a880840114e0a3b9010000000000000000000000000000000880000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000010000000000000200000000000004000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000001000000000000000000000000000f89df89b94be41a9ec942d5b52be07cc7f4d7e30e10e9b652af863a0ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3efa0000000000000000000000000e1a9d9c9abb872ddef70a4d108fd8fc3c7ce4dc4a0000000000000000000000000658d9c76ff358984d6436ea11ee1eda08894c818a000000000000000000000000000000000000000000000000000000000017d7840";
+
+        vm.expectRevert("Receipt status is not success");
+        wrapper.validateReceiptStatus(legacyFailedReceipt);
     }
 }

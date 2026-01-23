@@ -232,6 +232,39 @@ library ReceiptValidator {
     }
 
     /**
+     * @dev Validate receipt status == 1 (successful execution)
+     * Receipt structure: [status, cumulativeGasUsed, logsBloom, logs]
+     * Status is 0x01 for success, 0x80 (empty) for failure in post-Byzantium receipts
+     */
+    function validateReceiptStatus(bytes calldata receiptRlp) internal pure returns (bool) {
+        uint256 offset = 0;
+
+        // Handle typed receipts (EIP-2718)
+        if (receiptRlp.length > 0 && uint8(receiptRlp[0]) < 0x80) {
+            offset += 1; // Skip typed receipt prefix
+        }
+
+        // Skip RLP list prefix
+        require(uint8(receiptRlp[offset]) >= 0xc0, "Invalid receipt RLP");
+        if (uint8(receiptRlp[offset]) >= 0xf8) {
+            offset += 1 + (uint8(receiptRlp[offset]) - 0xf7);
+        } else {
+            offset += 1;
+        }
+
+        // Now at status field (first item in receipt)
+        // Status encoding: 0x01 = success (1), 0x80 = failure (empty/0)
+        uint8 statusByte = uint8(receiptRlp[offset]);
+
+        // Status must be 0x01 (success)
+        // 0x80 means empty byte string (status = 0, failed)
+        // 0x01 means single byte with value 1 (success)
+        require(statusByte == 0x01, "Receipt status is not success");
+
+        return true;
+    }
+
+    /**
      * @dev Validate native ETH transfer by checking tx 'to' and 'value' fields
      */
     function validateNativeTransfer(bytes calldata txRlp, address expectedRecipient, uint256 expectedAmount)
