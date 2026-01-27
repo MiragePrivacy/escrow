@@ -52,24 +52,14 @@ contract EscrowNativeTest is Test {
         vm.prank(deployer);
         vm.expectRevert("Incorrect ETH amount");
         new Escrow{value: 0.5 ether}( // Wrong amount - should be 1 ether
-            address(0),
-            recipient,
-            EXPECTED_AMOUNT,
-            REWARD_AMOUNT,
-            PAYMENT_AMOUNT
+            address(0), recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT
         );
     }
 
     function testConstructorNativeZeroValueWithAmounts() public {
         vm.prank(deployer);
         vm.expectRevert("Incorrect ETH amount");
-        new Escrow{value: 0}(
-            address(0),
-            recipient,
-            EXPECTED_AMOUNT,
-            REWARD_AMOUNT,
-            PAYMENT_AMOUNT
-        );
+        new Escrow{value: 0}(address(0), recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
     }
 
     function testFundNative() public {
@@ -287,11 +277,7 @@ contract EscrowNativeTest is Test {
         _bondExecutor();
 
         Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
-            blockHeader: hex"",
-            receiptRlp: hex"",
-            proofNodes: hex"",
-            receiptPath: hex"",
-            logIndex: 0
+            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
         });
 
         vm.prank(executor);
