@@ -43,13 +43,23 @@ contract Escrow {
         uint256 logIndex; // Index of target log in receipt
     }
 
+    // Proof structure for native ETH transfers (requires both tx and receipt)
+    struct NativeTransferProof {
+        bytes blockHeader; // RLP-encoded block header
+        bytes transactionRlp; // RLP-encoded target transaction (for to/value validation)
+        bytes txProofNodes; // MPT proof nodes for transaction inclusion
+        bytes receiptRlp; // RLP-encoded receipt (for status validation)
+        bytes receiptProofNodes; // MPT proof nodes for receipt inclusion
+        bytes path; // RLP-encoded index (same for both tx and receipt)
+    }
+
     constructor(
         address _tokenContract,
         address _expectedRecipient,
         uint256 _expectedAmount,
         uint256 _currentRewardAmount,
         uint256 _currentPaymentAmount
-    ) {
+    ) payable {
         tokenContract = _tokenContract;
         expectedRecipient = _expectedRecipient;
         expectedAmount = _expectedAmount;
@@ -57,7 +67,17 @@ contract Escrow {
         maxBlockLookback = 256;
 
         if (_currentRewardAmount > 0 && _currentPaymentAmount > 0) {
-            fund(_currentRewardAmount, _currentPaymentAmount);
+            if (_tokenContract == address(0)) {
+                // Native ETH escrow - fund directly from msg.value
+                require(msg.value == _currentRewardAmount + _currentPaymentAmount, "Incorrect ETH amount");
+                currentRewardAmount = _currentRewardAmount;
+                originalRewardAmount = _currentRewardAmount;
+                currentPaymentAmount = _currentPaymentAmount;
+                funded = true;
+            } else {
+                // ERC20 escrow
+                fund(_currentRewardAmount, _currentPaymentAmount);
+            }
         }
     }
 
@@ -65,6 +85,7 @@ contract Escrow {
     function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) public {
         require(msg.sender == deployerAddress, "Only callable by the deployer");
         require(!funded, "Contract already funded");
+        require(tokenContract != address(0), "Use fundNative for native ETH");
         require(_currentRewardAmount > 0, "Reward amount must be non-zero");
         require(_currentPaymentAmount > 0, "Payment amount must be non-zero");
 
@@ -75,9 +96,24 @@ contract Escrow {
         funded = true;
     }
 
+    function fundNative(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) public payable {
+        require(msg.sender == deployerAddress, "Only callable by the deployer");
+        require(!funded, "Contract already funded");
+        require(tokenContract == address(0), "Use fund for ERC20");
+        require(_currentRewardAmount > 0, "Reward amount must be non-zero");
+        require(_currentPaymentAmount > 0, "Payment amount must be non-zero");
+        require(msg.value == _currentRewardAmount + _currentPaymentAmount, "Incorrect ETH amount");
+
+        currentRewardAmount = _currentRewardAmount;
+        originalRewardAmount = _currentRewardAmount;
+        currentPaymentAmount = _currentPaymentAmount;
+        funded = true;
+    }
+
     // takes _bondAmount from the caller's balance of the tokenContract. The bondstatus is now bonded, execution deadline is current block timestamp + 5 minutes. Sets bondedexecutor to the caller. Will only accept a bond if the cancellationrequest is set to false, and no one is bonded.
     function bond(uint256 _bondAmount) public {
         require(funded, "Contract not funded");
+        require(tokenContract != address(0), "Use bondNative for native ETH");
         require(!cancellationRequest, "Cancellation requested");
 
         // If deadline passed and someone is bonded, add their bond to reward
@@ -98,6 +134,25 @@ contract Escrow {
         bondAmount = _bondAmount;
     }
 
+    function bondNative() public payable {
+        require(funded, "Contract not funded");
+        require(tokenContract == address(0), "Use bond for ERC20");
+        require(!cancellationRequest, "Cancellation requested");
+
+        if (executionDeadline > 0 && block.timestamp > executionDeadline) {
+            currentRewardAmount += bondAmount;
+            totalBondsDeposited += bondAmount;
+            tryResetBondData();
+        }
+
+        require(!is_bonded(), "Another executor is already bonded");
+        require(msg.value >= currentRewardAmount / 2, "Bond must be at least half of reward amount");
+
+        bondedExecutor = msg.sender;
+        executionDeadline = block.timestamp + 5 minutes;
+        bondAmount = msg.value;
+    }
+
     // only deployer can call this. will set the cancellation request to true.
     // when the cancellation is requested, the bonded executor may still finish their job and collect, but no new executor is accepted after the current bonded one.
     function requestCancellation() public {
@@ -112,37 +167,19 @@ contract Escrow {
         cancellationRequest = false;
     }
 
-    // Now validates a given merkle proof against a recent block hash and checks the Transfer event's contents
+    // Validates a given merkle proof against a recent block hash and checks the Transfer event's contents
     function collect(ReceiptProof calldata proof, uint256 targetBlockNumber) public {
-        require(funded, "Contract not funded");
-        require(msg.sender == bondedExecutor && is_bonded(), "Only bonded executor can collect");
+        require(tokenContract != address(0), "Use collectNative for native ETH");
+        _validateBlockHeader(proof.blockHeader, targetBlockNumber);
 
-        // Validate target block is recent and accessible
-        require(targetBlockNumber <= block.number, "Target block is in the future");
-        require(block.number - targetBlockNumber <= maxBlockLookback, "Target block too old");
-
-        // Get the target block hash
-        bytes32 targetBlockHash = blockhash(targetBlockNumber);
-        require(targetBlockHash != bytes32(0), "Unable to retrieve block hash");
-
-        // Validate block header hash matches target block
-        require(keccak256(proof.blockHeader) == targetBlockHash, "Block header hash mismatch");
-
-        // Also verify the block number in header matches target
-        require(
-            BlockHeaderParser.extractBlockNumber(proof.blockHeader) == targetBlockNumber, "Header block number mismatch"
-        );
-
-        // Extract receipts root from block header
+        // Extract receipts root and verify receipt inclusion
         bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(proof.blockHeader);
-
-        // Verify receipt proof against receipts root using MPT verification
         require(
             MPTVerifier.verifyReceiptProof(proof.receiptRlp, proof.proofNodes, proof.receiptPath, receiptsRoot),
             "Invalid receipt MPT proof"
         );
 
-        // Extract and validate the Transfer event
+        // Validate the Transfer event
         require(
             ReceiptValidator.validateTransferInReceipt(
                 proof.receiptRlp, proof.logIndex, tokenContract, expectedRecipient, expectedAmount
@@ -150,6 +187,54 @@ contract Escrow {
             "Invalid Transfer event"
         );
 
+        _payout();
+    }
+
+    // Validates native ETH transfer by proving both transaction inclusion (for to/value)
+    // and receipt inclusion (for status == 1, i.e., successful execution)
+    function collectNative(NativeTransferProof calldata proof, uint256 targetBlockNumber) public {
+        require(tokenContract == address(0), "Use collect for ERC20");
+        _validateBlockHeader(proof.blockHeader, targetBlockNumber);
+
+        // Verify transaction inclusion in transactions trie
+        bytes32 transactionsRoot = BlockHeaderParser.extractTransactionsRoot(proof.blockHeader);
+        require(
+            MPTVerifier.verifyReceiptProof(proof.transactionRlp, proof.txProofNodes, proof.path, transactionsRoot),
+            "Invalid transaction MPT proof"
+        );
+
+        // Verify receipt inclusion in receipts trie
+        bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(proof.blockHeader);
+        require(
+            MPTVerifier.verifyReceiptProof(proof.receiptRlp, proof.receiptProofNodes, proof.path, receiptsRoot),
+            "Invalid receipt MPT proof"
+        );
+
+        // Validate transaction succeeded (status == 1)
+        require(ReceiptValidator.validateReceiptStatus(proof.receiptRlp), "Transaction failed (status != 1)");
+
+        // Validate the native ETH transfer (to and value fields)
+        require(
+            ReceiptValidator.validateNativeTransfer(proof.transactionRlp, expectedRecipient, expectedAmount),
+            "Invalid native transfer"
+        );
+
+        _payoutNative();
+    }
+
+    function _validateBlockHeader(bytes calldata blockHeader, uint256 targetBlockNumber) internal view {
+        require(funded, "Contract not funded");
+        require(msg.sender == bondedExecutor && is_bonded(), "Only bonded executor can collect");
+        require(targetBlockNumber <= block.number, "Target block is in the future");
+        require(block.number - targetBlockNumber <= maxBlockLookback, "Target block too old");
+
+        bytes32 targetBlockHash = blockhash(targetBlockNumber);
+        require(targetBlockHash != bytes32(0), "Unable to retrieve block hash");
+        require(keccak256(blockHeader) == targetBlockHash, "Block header hash mismatch");
+        require(BlockHeaderParser.extractBlockNumber(blockHeader) == targetBlockNumber, "Header block number mismatch");
+    }
+
+    function _payout() internal {
         uint256 payout = bondAmount + currentRewardAmount + currentPaymentAmount;
         address executor = bondedExecutor;
 
@@ -159,13 +244,27 @@ contract Escrow {
         funded = false;
         currentPaymentAmount = 0;
         currentRewardAmount = 0;
-        // Use transfer() on Ethereum mainnet (1) and Tempo (42429)
-        // Other chains (e.g., Mirage) use send()
+
         if (block.chainid == 1 || block.chainid == 42429) {
             IERC20(tokenContract).transfer(executor, payout);
         } else {
             IERC20(tokenContract).send(executor, payout);
         }
+    }
+
+    function _payoutNative() internal {
+        uint256 payout = bondAmount + currentRewardAmount + currentPaymentAmount;
+        address executor = bondedExecutor;
+
+        bondedExecutor = address(0);
+        bondAmount = 0;
+        executionDeadline = 0;
+        funded = false;
+        currentPaymentAmount = 0;
+        currentRewardAmount = 0;
+
+        (bool success,) = executor.call{value: payout}("");
+        require(success, "ETH transfer failed");
     }
 
     // checks if contract is currently bonded by verifying deadline
@@ -177,8 +276,8 @@ contract Escrow {
     // only if the contract is not currently bonded (or the execution deadline has passed)
     function withdraw() public {
         require(funded, "Contract not funded");
+        require(tokenContract != address(0), "Use withdrawNative for native ETH");
         require(msg.sender == deployerAddress, "Only callable by the deployer");
-        require(funded == true, "The contract was not funded or has been drained already");
         tryResetBondData();
 
         uint256 withdrawableAmount = currentPaymentAmount + originalRewardAmount;
@@ -190,6 +289,24 @@ contract Escrow {
         require(withdrawableAmount > 0, "No withdrawable funds");
 
         IERC20(tokenContract).transfer(msg.sender, withdrawableAmount);
+    }
+
+    function withdrawNative() public {
+        require(funded, "Contract not funded");
+        require(tokenContract == address(0), "Use withdraw for ERC20");
+        require(msg.sender == deployerAddress, "Only callable by the deployer");
+        tryResetBondData();
+
+        uint256 withdrawableAmount = currentPaymentAmount + originalRewardAmount;
+
+        funded = false;
+        currentPaymentAmount = 0;
+        currentRewardAmount = 0;
+
+        require(withdrawableAmount > 0, "No withdrawable funds");
+
+        (bool success,) = msg.sender.call{value: withdrawableAmount}("");
+        require(success, "ETH transfer failed");
     }
 
     function tryResetBondData() internal {

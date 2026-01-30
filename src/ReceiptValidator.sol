@@ -230,4 +230,97 @@ library ReceiptValidator {
             revert("Expected string data, got list");
         }
     }
+
+    /**
+     * @dev Validate receipt status == 1 (successful execution)
+     * Receipt structure: [status, cumulativeGasUsed, logsBloom, logs]
+     * Status is 0x01 for success, 0x80 (empty) for failure in post-Byzantium receipts
+     */
+    function validateReceiptStatus(bytes calldata receiptRlp) internal pure returns (bool) {
+        uint256 offset = 0;
+
+        // Handle typed receipts (EIP-2718)
+        if (receiptRlp.length > 0 && uint8(receiptRlp[0]) < 0x80) {
+            offset += 1; // Skip typed receipt prefix
+        }
+
+        // Skip RLP list prefix
+        require(uint8(receiptRlp[offset]) >= 0xc0, "Invalid receipt RLP");
+        if (uint8(receiptRlp[offset]) >= 0xf8) {
+            offset += 1 + (uint8(receiptRlp[offset]) - 0xf7);
+        } else {
+            offset += 1;
+        }
+
+        // Now at status field (first item in receipt)
+        // Status encoding: 0x01 = success (1), 0x80 = failure (empty/0)
+        uint8 statusByte = uint8(receiptRlp[offset]);
+
+        // Status must be 0x01 (success)
+        // 0x80 means empty byte string (status = 0, failed)
+        // 0x01 means single byte with value 1 (success)
+        require(statusByte == 0x01, "Receipt status is not success");
+
+        return true;
+    }
+
+    /**
+     * @dev Validate native ETH transfer by checking tx 'to' and 'value' fields
+     */
+    function validateNativeTransfer(bytes calldata txRlp, address expectedRecipient, uint256 expectedAmount)
+        internal
+        pure
+        returns (bool)
+    {
+        uint256 offset = 0;
+
+        // Skip type prefix for typed transactions (EIP-2718)
+        uint256 toIndex = 3; // Legacy: [nonce, gasPrice, gasLimit, to, value, ...]
+        if (txRlp.length > 0 && uint8(txRlp[0]) < 0x80) {
+            uint8 txType = uint8(txRlp[0]);
+            offset = 1;
+            if (txType == 0x01) {
+                toIndex = 4; // EIP-2930: [chainId, nonce, gasPrice, gasLimit, to, value, ...]
+            } else if (txType == 0x02) {
+                toIndex = 5; // EIP-1559: [chainId, nonce, maxPriorityFee, maxFee, gasLimit, to, value, ...]
+            } else {
+                revert("Unsupported tx type");
+            }
+        }
+
+        // Skip list prefix
+        require(uint8(txRlp[offset]) >= 0xc0, "Invalid tx RLP");
+        offset += uint8(txRlp[offset]) >= 0xf8 ? 1 + (uint8(txRlp[offset]) - 0xf7) : 1;
+
+        // Skip to 'to' field
+        for (uint256 i = 0; i < toIndex; i++) {
+            offset = txRlp.skipItem(offset);
+        }
+
+        // Validate 'to' address (0x94 prefix = 20 byte string)
+        require(uint8(txRlp[offset]) == 0x94, "Invalid to address");
+        address to;
+        assembly {
+            to := shr(96, calldataload(add(txRlp.offset, add(offset, 1))))
+        }
+        require(to == expectedRecipient, "Recipient mismatch");
+        offset += 21;
+
+        // Validate 'value'
+        uint8 prefix = uint8(txRlp[offset]);
+        uint256 value;
+        if (prefix < 0x80) {
+            value = prefix;
+        } else if (prefix == 0x80) {
+            value = 0;
+        } else {
+            uint256 len = prefix - 0x80;
+            for (uint256 i = 0; i < len; i++) {
+                value = (value << 8) | uint8(txRlp[offset + 1 + i]);
+            }
+        }
+        require(value == expectedAmount, "Amount mismatch");
+
+        return true;
+    }
 }
