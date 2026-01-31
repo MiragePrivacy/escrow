@@ -245,10 +245,11 @@ contract Escrow {
         currentPaymentAmount = 0;
         currentRewardAmount = 0;
 
-        if (block.chainid == 1 || block.chainid == 42429) {
-            IERC20(tokenContract).transfer(executor, payout);
-        } else {
+        if (block.chainid == 11155111) {
+            // Sepolia testnet uses non-standard send
             IERC20(tokenContract).send(executor, payout);
+        } else {
+            IERC20(tokenContract).transfer(executor, payout);
         }
     }
 
