@@ -31,7 +31,8 @@ library BlockHeaderParser {
             offset += 1;
         }
 
-        if (block.chainid == 42429) {
+        // Tempo networks: 42429 (local/test), 42431 (Moderato testnet)
+        if (block.chainid == 42429 || block.chainid == 42431) {
             // Tempo: skip first 3 fields (slot, parent_slot, extra) to get to inner header
             for (uint256 i = 0; i < 3; i++) {
                 offset = blockHeader.skipItem(offset);
