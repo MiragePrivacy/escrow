@@ -2,7 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {Test, console} from "forge-std/Test.sol";
-import {Escrow, IERC20} from "../src/Escrow.sol";
+import {EscrowERC20, IERC20} from "../src/EscrowERC20.sol";
 import {ReceiptValidator} from "../src/ReceiptValidator.sol";
 
 contract ReceiptValidatorWrapper {
@@ -101,7 +101,7 @@ contract TempoTest is Test {
         vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
 
         vm.prank(deployer);
-        Escrow escrow = new Escrow(TOKEN, TO_ADDRESS, AMOUNT, 500e18, 500e18);
+        EscrowERC20 escrow = new EscrowERC20(TOKEN, TO_ADDRESS, AMOUNT, 500e18, 500e18);
 
         vm.prank(FROM_ADDRESS);
         escrow.bond(250e18);
@@ -111,7 +111,7 @@ contract TempoTest is Test {
 
         vm.prank(FROM_ADDRESS);
         escrow.collect(
-            Escrow.ReceiptProof({
+            EscrowERC20.ReceiptProof({
                 blockHeader: BLOCK_HEADER,
                 receiptRlp: RECEIPT_RLP,
                 proofNodes: PROOF_NODES,

@@ -2,10 +2,10 @@
 pragma solidity ^0.8.30;
 
 import {Test} from "forge-std/Test.sol";
-import {Escrow} from "../src/Escrow.sol";
+import {EscrowNative} from "../src/EscrowNative.sol";
 
 contract EscrowNativeTest is Test {
-    Escrow public escrow;
+    EscrowNative public escrow;
     address public deployer;
     address public executor;
     address public recipient;
@@ -29,8 +29,7 @@ contract EscrowNativeTest is Test {
 
         // Deploy escrow with native ETH funding in constructor
         vm.prank(deployer);
-        escrow = new Escrow{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(
-            address(0), // Native ETH
+        escrow = new EscrowNative{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(
             recipient,
             EXPECTED_AMOUNT,
             REWARD_AMOUNT,
@@ -51,25 +50,25 @@ contract EscrowNativeTest is Test {
     function testConstructorNativeIncorrectAmount() public {
         vm.prank(deployer);
         vm.expectRevert("Incorrect ETH amount");
-        new Escrow{value: 0.5 ether}( // Wrong amount - should be 1 ether
-            address(0), recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT
+        new EscrowNative{value: 0.5 ether}( // Wrong amount - should be 1 ether
+            recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT
         );
     }
 
     function testConstructorNativeZeroValueWithAmounts() public {
         vm.prank(deployer);
         vm.expectRevert("Incorrect ETH amount");
-        new Escrow{value: 0}(address(0), recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
+        new EscrowNative{value: 0}(recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
     }
 
     function testFundNative() public {
         vm.startPrank(deployer);
 
         // Create unfunded escrow
-        Escrow escrow2 = new Escrow(address(0), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowNative escrow2 = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
 
         // Fund it separately
-        escrow2.fundNative{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
+        escrow2.fund{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
         vm.stopPrank();
 
         assertEq(escrow2.currentRewardAmount(), REWARD_AMOUNT);
@@ -81,49 +80,40 @@ contract EscrowNativeTest is Test {
 
     function testFundNativeZeroReward() public {
         vm.startPrank(deployer);
-        Escrow unfundedEscrow = new Escrow(address(0), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
 
         vm.expectRevert("Reward amount must be non-zero");
-        unfundedEscrow.fundNative{value: PAYMENT_AMOUNT}(0, PAYMENT_AMOUNT);
+        unfundedEscrow.fund{value: PAYMENT_AMOUNT}(0, PAYMENT_AMOUNT);
         vm.stopPrank();
     }
 
     function testFundNativeOnlyDeployer() public {
         vm.prank(deployer);
-        Escrow unfundedEscrow = new Escrow(address(0), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
 
         vm.prank(executor);
         vm.expectRevert("Only callable by the deployer");
-        unfundedEscrow.fundNative{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
+        unfundedEscrow.fund{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
     }
 
     function testFundNativeAlreadyFunded() public {
         vm.prank(deployer);
         vm.expectRevert("Contract already funded");
-        escrow.fundNative{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
+        escrow.fund{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
     }
 
     function testFundNativeIncorrectAmount() public {
         vm.startPrank(deployer);
-        Escrow unfundedEscrow = new Escrow(address(0), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
 
         vm.expectRevert("Incorrect ETH amount");
-        unfundedEscrow.fundNative{value: 0.5 ether}(REWARD_AMOUNT, PAYMENT_AMOUNT);
-        vm.stopPrank();
-    }
-
-    function testFundNativeWrongFunction() public {
-        vm.startPrank(deployer);
-        Escrow unfundedEscrow = new Escrow(address(0), recipient, EXPECTED_AMOUNT, 0, 0);
-
-        vm.expectRevert("Use fundNative for native ETH");
-        unfundedEscrow.fund(REWARD_AMOUNT, PAYMENT_AMOUNT);
+        unfundedEscrow.fund{value: 0.5 ether}(REWARD_AMOUNT, PAYMENT_AMOUNT);
         vm.stopPrank();
     }
 
     function testBondNative() public {
         vm.prank(executor);
-        escrow.bondNative{value: BOND_AMOUNT}();
+        escrow.bond{value: BOND_AMOUNT}();
 
         assertEq(escrow.bondedExecutor(), executor);
         assertEq(escrow.bondAmount(), BOND_AMOUNT);
@@ -134,11 +124,11 @@ contract EscrowNativeTest is Test {
 
     function testBondNativeNotFunded() public {
         vm.prank(deployer);
-        Escrow unfundedEscrow = new Escrow(address(0), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
 
         vm.prank(executor);
         vm.expectRevert("Contract not funded");
-        unfundedEscrow.bondNative{value: BOND_AMOUNT}();
+        unfundedEscrow.bond{value: BOND_AMOUNT}();
     }
 
     function testBondNativeCancellationRequested() public {
@@ -147,13 +137,13 @@ contract EscrowNativeTest is Test {
 
         vm.prank(executor);
         vm.expectRevert("Cancellation requested");
-        escrow.bondNative{value: BOND_AMOUNT}();
+        escrow.bond{value: BOND_AMOUNT}();
     }
 
     function testBondNativeInsufficientAmount() public {
         vm.prank(executor);
         vm.expectRevert("Bond must be at least half of reward amount");
-        escrow.bondNative{value: BOND_AMOUNT / 4}();
+        escrow.bond{value: BOND_AMOUNT / 4}();
     }
 
     function testBondNativeAfterDeadlinePassed() public {
@@ -166,7 +156,7 @@ contract EscrowNativeTest is Test {
         uint256 newBondAmount = updatedReward / 2;
 
         vm.prank(other);
-        escrow.bondNative{value: newBondAmount}();
+        escrow.bond{value: newBondAmount}();
 
         assertEq(escrow.bondedExecutor(), other);
         assertEq(escrow.currentRewardAmount(), updatedReward);
@@ -185,9 +175,9 @@ contract EscrowNativeTest is Test {
         vm.startPrank(other);
 
         vm.expectRevert("Bond must be at least half of reward amount");
-        escrow.bondNative{value: BOND_AMOUNT}();
+        escrow.bond{value: BOND_AMOUNT}();
 
-        escrow.bondNative{value: minimumRequiredBond}();
+        escrow.bond{value: minimumRequiredBond}();
         vm.stopPrank();
 
         assertEq(escrow.currentRewardAmount(), updatedReward);
@@ -196,16 +186,10 @@ contract EscrowNativeTest is Test {
         assertEq(escrow.totalBondsDeposited(), BOND_AMOUNT);
     }
 
-    function testBondNativeWrongFunction() public {
-        vm.prank(executor);
-        vm.expectRevert("Use bondNative for native ETH");
-        escrow.bond(BOND_AMOUNT);
-    }
-
     function testCollectNativeRequiresProof() public {
         _bondExecutor();
 
-        Escrow.NativeTransferProof memory dummyProof = Escrow.NativeTransferProof({
+        EscrowNative.NativeTransferProof memory dummyProof = EscrowNative.NativeTransferProof({
             blockHeader: hex"",
             transactionRlp: hex"",
             txProofNodes: hex"",
@@ -216,14 +200,14 @@ contract EscrowNativeTest is Test {
 
         vm.prank(executor);
         vm.expectRevert();
-        escrow.collectNative(dummyProof, block.number - 1);
+        escrow.collect(dummyProof, block.number - 1);
     }
 
     function testCollectNativeNotFunded() public {
         vm.prank(deployer);
-        Escrow unfundedEscrow = new Escrow(address(0), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
 
-        Escrow.NativeTransferProof memory dummyProof = Escrow.NativeTransferProof({
+        EscrowNative.NativeTransferProof memory dummyProof = EscrowNative.NativeTransferProof({
             blockHeader: hex"",
             transactionRlp: hex"",
             txProofNodes: hex"",
@@ -234,13 +218,13 @@ contract EscrowNativeTest is Test {
 
         vm.prank(executor);
         vm.expectRevert("Contract not funded");
-        unfundedEscrow.collectNative(dummyProof, block.number - 1);
+        unfundedEscrow.collect(dummyProof, block.number - 1);
     }
 
     function testCollectNativeNotBondedExecutor() public {
         _bondExecutor();
 
-        Escrow.NativeTransferProof memory dummyProof = Escrow.NativeTransferProof({
+        EscrowNative.NativeTransferProof memory dummyProof = EscrowNative.NativeTransferProof({
             blockHeader: hex"",
             transactionRlp: hex"",
             txProofNodes: hex"",
@@ -251,7 +235,7 @@ contract EscrowNativeTest is Test {
 
         vm.prank(other);
         vm.expectRevert("Only bonded executor can collect");
-        escrow.collectNative(dummyProof, block.number - 1);
+        escrow.collect(dummyProof, block.number - 1);
     }
 
     function testCollectNativeAfterDeadline() public {
@@ -259,7 +243,7 @@ contract EscrowNativeTest is Test {
 
         vm.warp(block.timestamp + 6 minutes);
 
-        Escrow.NativeTransferProof memory dummyProof = Escrow.NativeTransferProof({
+        EscrowNative.NativeTransferProof memory dummyProof = EscrowNative.NativeTransferProof({
             blockHeader: hex"",
             transactionRlp: hex"",
             txProofNodes: hex"",
@@ -270,18 +254,6 @@ contract EscrowNativeTest is Test {
 
         vm.prank(executor);
         vm.expectRevert("Only bonded executor can collect");
-        escrow.collectNative(dummyProof, block.number - 1);
-    }
-
-    function testCollectNativeWrongFunction() public {
-        _bondExecutor();
-
-        Escrow.ReceiptProof memory dummyProof = Escrow.ReceiptProof({
-            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
-        });
-
-        vm.prank(executor);
-        vm.expectRevert("Use collectNative for native ETH");
         escrow.collect(dummyProof, block.number - 1);
     }
 
@@ -289,7 +261,7 @@ contract EscrowNativeTest is Test {
         uint256 initialBalance = deployer.balance;
 
         vm.prank(deployer);
-        escrow.withdrawNative();
+        escrow.withdraw();
 
         assertEq(deployer.balance, initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
         assertFalse(escrow.funded());
@@ -299,17 +271,17 @@ contract EscrowNativeTest is Test {
 
     function testWithdrawNativeNotFunded() public {
         vm.prank(deployer);
-        Escrow unfundedEscrow = new Escrow(address(0), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
 
         vm.prank(deployer);
         vm.expectRevert("Contract not funded");
-        unfundedEscrow.withdrawNative();
+        unfundedEscrow.withdraw();
     }
 
     function testWithdrawNativeOnlyDeployer() public {
         vm.prank(executor);
         vm.expectRevert("Only callable by the deployer");
-        escrow.withdrawNative();
+        escrow.withdraw();
     }
 
     function testWithdrawNativeWhileBonded() public {
@@ -317,7 +289,7 @@ contract EscrowNativeTest is Test {
 
         vm.prank(deployer);
         vm.expectRevert("Cannot reset while bond is active");
-        escrow.withdrawNative();
+        escrow.withdraw();
     }
 
     function testWithdrawNativeAfterBondExpired() public {
@@ -326,15 +298,9 @@ contract EscrowNativeTest is Test {
         vm.warp(block.timestamp + 6 minutes);
 
         vm.prank(deployer);
-        escrow.withdrawNative();
+        escrow.withdraw();
 
         assertFalse(escrow.funded());
-    }
-
-    function testWithdrawNativeWrongFunction() public {
-        vm.prank(deployer);
-        vm.expectRevert("Use withdrawNative for native ETH");
-        escrow.withdraw();
     }
 
     function testIsBondedNative() public {
@@ -352,7 +318,7 @@ contract EscrowNativeTest is Test {
 
         vm.prank(other);
         vm.expectRevert("Another executor is already bonded");
-        escrow.bondNative{value: BOND_AMOUNT}();
+        escrow.bond{value: BOND_AMOUNT}();
     }
 
     function testBondNativeAfterFirstExecutorStillActive() public {
@@ -363,14 +329,14 @@ contract EscrowNativeTest is Test {
 
         vm.prank(other);
         vm.expectRevert("Another executor is already bonded");
-        escrow.bondNative{value: BOND_AMOUNT}();
+        escrow.bond{value: BOND_AMOUNT}();
 
         assertEq(escrow.bondedExecutor(), executor);
     }
 
     function testMultipleBondCyclesNative() public {
         vm.prank(executor);
-        escrow.bondNative{value: BOND_AMOUNT}();
+        escrow.bond{value: BOND_AMOUNT}();
 
         vm.warp(block.timestamp + 6 minutes);
 
@@ -379,7 +345,7 @@ contract EscrowNativeTest is Test {
         uint256 newBondAmount = updatedReward / 2;
 
         vm.prank(other);
-        escrow.bondNative{value: newBondAmount}();
+        escrow.bond{value: newBondAmount}();
 
         assertEq(escrow.bondedExecutor(), other);
         assertEq(escrow.currentRewardAmount(), updatedReward);
@@ -391,7 +357,7 @@ contract EscrowNativeTest is Test {
 
         // First executor bonds at time 0
         vm.prank(executor);
-        escrow.bondNative{value: BOND_AMOUNT}();
+        escrow.bond{value: BOND_AMOUNT}();
 
         // Warp to startTime + 6 minutes (first deadline expires)
         vm.warp(startTime + 6 minutes);
@@ -403,7 +369,7 @@ contract EscrowNativeTest is Test {
 
         // Second executor bonds at startTime + 6 minutes
         vm.prank(other);
-        escrow.bondNative{value: newBondAmount}();
+        escrow.bond{value: newBondAmount}();
 
         // Verify first bond was collected
         assertEq(escrow.currentRewardAmount(), updatedReward);
@@ -417,7 +383,7 @@ contract EscrowNativeTest is Test {
         uint256 initialBalance = deployer.balance;
 
         vm.prank(deployer);
-        escrow.withdrawNative();
+        escrow.withdraw();
 
         assertEq(deployer.balance, initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
         // Escrow holds both failed bonds: first bond (0.25) + second bond (0.375)
@@ -443,7 +409,7 @@ contract EscrowNativeTest is Test {
 
     function _bondExecutor() internal {
         vm.prank(executor);
-        escrow.bondNative{value: BOND_AMOUNT}();
+        escrow.bond{value: BOND_AMOUNT}();
     }
 }
 
