@@ -11,6 +11,9 @@ import "./RLPParser.sol";
 library ReceiptValidator {
     using RLPParser for bytes;
 
+    // Pre-computed Transfer(address,address,uint256) event signature
+    bytes32 private constant TRANSFER_EVENT_SIG = 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef;
+
     /**
      * @dev Validate Transfer event in receipt
      * @param receiptRlp RLP-encoded transaction receipt
@@ -159,8 +162,7 @@ library ReceiptValidator {
 
         // Check first topic (event signature)
         bytes32 eventSig = receiptRlp.extractBytes32(offset);
-        bytes32 expectedSig = keccak256("Transfer(address,address,uint256)");
-        require(eventSig == expectedSig, "Wrong event signature");
+        require(eventSig == TRANSFER_EVENT_SIG, "Wrong event signature");
 
         // Check second topic (from address) --skip validation
         offset = receiptRlp.skipItem(offset);
