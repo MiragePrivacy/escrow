@@ -47,7 +47,10 @@ contract EscrowERC20 is EscrowBase {
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
         currentPaymentAmount = _currentPaymentAmount;
-        IERC20(tokenContract).transferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount);
+        require(
+            IERC20(tokenContract).transferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount),
+            "Token transfer failed"
+        );
         funded = true;
     }
 
@@ -58,7 +61,10 @@ contract EscrowERC20 is EscrowBase {
 
         _validateBondRequirements(_bondAmount);
 
-        IERC20(tokenContract).transferFrom(msg.sender, address(this), _bondAmount);
+        require(
+            IERC20(tokenContract).transferFrom(msg.sender, address(this), _bondAmount),
+            "Token transfer failed"
+        );
 
         _setBondData(_bondAmount);
     }
@@ -91,12 +97,14 @@ contract EscrowERC20 is EscrowBase {
 
         _clearPayoutState();
 
+        bool success;
         if (block.chainid == 11155111) {
             // Sepolia testnet uses non-standard send
-            IERC20(tokenContract).send(executor, payout);
+            success = IERC20(tokenContract).send(executor, payout);
         } else {
-            IERC20(tokenContract).transfer(executor, payout);
+            success = IERC20(tokenContract).transfer(executor, payout);
         }
+        require(success, "Token transfer failed");
     }
 
     // allows deployer to withdraw all assets except the seized bonds (so the deployer can withdraw only and only what was deposited by deployer in the start function)
@@ -111,6 +119,9 @@ contract EscrowERC20 is EscrowBase {
 
         require(withdrawableAmount > 0, "No withdrawable funds");
 
-        IERC20(tokenContract).transfer(msg.sender, withdrawableAmount);
+        require(
+            IERC20(tokenContract).transfer(msg.sender, withdrawableAmount),
+            "Token transfer failed"
+        );
     }
 }
