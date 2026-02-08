@@ -29,7 +29,7 @@ abstract contract EscrowBase {
     // The following variables are for Merkle proof validation
     address public immutable expectedRecipient; // The intended recipient of the transfer
     uint256 public immutable expectedAmount; // The expected transfer amount
-    uint256 public immutable maxBlockLookback; // Maximum blocks to look back for validation
+    uint256 public constant MAX_BLOCK_LOOKBACK = 256; // Maximum blocks to look back for validation
 
     // The following variables are dynamically adjusted by the contract when a bond or cancellation request is submitted.
     address public bondedExecutor;
@@ -43,7 +43,6 @@ abstract contract EscrowBase {
         expectedRecipient = _expectedRecipient;
         expectedAmount = _expectedAmount;
         deployerAddress = msg.sender;
-        maxBlockLookback = 256;
     }
 
     // only deployer can call this. will set the cancellation request to true.
@@ -70,7 +69,7 @@ abstract contract EscrowBase {
         if (!funded) revert NotFunded();
         if (msg.sender != bondedExecutor || !is_bonded()) revert OnlyBondedExecutor();
         if (targetBlockNumber > block.number) revert TargetBlockInFuture();
-        if (block.number - targetBlockNumber > maxBlockLookback) revert TargetBlockTooOld();
+        if (block.number - targetBlockNumber > MAX_BLOCK_LOOKBACK) revert TargetBlockTooOld();
 
         bytes32 targetBlockHash = blockhash(targetBlockNumber);
         if (targetBlockHash == bytes32(0)) revert BlockHashUnavailable();
