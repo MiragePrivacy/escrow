@@ -64,7 +64,7 @@ contract EscrowERC20 is EscrowBase {
     }
 
     // takes _bondAmount from the caller's balance of the tokenContract. The bondstatus is now bonded, execution deadline is current block timestamp + 5 minutes. Sets bondedexecutor to the caller. Will only accept a bond if the cancellationrequest is set to false, and no one is bonded.
-    function bond(uint256 _bondAmount) public {
+    function bond(uint256 _bondAmount) external {
         // If deadline passed and someone is bonded, add their bond to reward
         _handleExpiredBond();
 
@@ -78,7 +78,7 @@ contract EscrowERC20 is EscrowBase {
     }
 
     // Validates a given merkle proof against a recent block hash and checks the Transfer event's contents
-    function collect(ReceiptProof calldata proof, uint256 targetBlockNumber) public {
+    function collect(ReceiptProof calldata proof, uint256 targetBlockNumber) external {
         _validateBlockHeader(proof.blockHeader, targetBlockNumber);
 
         // Extract receipts root and verify receipt inclusion
@@ -115,7 +115,7 @@ contract EscrowERC20 is EscrowBase {
 
     // allows deployer to withdraw all assets except the seized bonds (so the deployer can withdraw only and only what was deposited by deployer in the start function)
     // only if the contract is not currently bonded (or the execution deadline has passed)
-    function withdraw() public {
+    function withdraw() external {
         _validateWithdraw();
         _tryResetBondData();
 

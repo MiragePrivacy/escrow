@@ -41,7 +41,7 @@ contract EscrowNative is EscrowBase {
         }
     }
 
-    function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) public payable {
+    function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) external payable {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (funded) revert AlreadyFunded();
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
@@ -54,7 +54,7 @@ contract EscrowNative is EscrowBase {
         funded = true;
     }
 
-    function bond() public payable {
+    function bond() external payable {
         // If deadline passed and someone is bonded, add their bond to reward
         _handleExpiredBond();
 
@@ -65,7 +65,7 @@ contract EscrowNative is EscrowBase {
 
     // Validates native ETH transfer by proving both transaction inclusion (for to/value)
     // and receipt inclusion (for status == 1, i.e., successful execution)
-    function collect(NativeTransferProof calldata proof, uint256 targetBlockNumber) public {
+    function collect(NativeTransferProof calldata proof, uint256 targetBlockNumber) external {
         _validateBlockHeader(proof.blockHeader, targetBlockNumber);
 
         // Verify transaction inclusion in transactions trie
@@ -103,7 +103,7 @@ contract EscrowNative is EscrowBase {
 
     // allows deployer to withdraw all assets except the seized bonds (so the deployer can withdraw only and only what was deposited by deployer in the start function)
     // only if the contract is not currently bonded (or the execution deadline has passed)
-    function withdraw() public {
+    function withdraw() external {
         _validateWithdraw();
         _tryResetBondData();
 

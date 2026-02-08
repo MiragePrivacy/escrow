@@ -47,14 +47,14 @@ abstract contract EscrowBase {
 
     // only deployer can call this. will set the cancellation request to true.
     // when the cancellation is requested, the bonded executor may still finish their job and collect, but no new executor is accepted after the current bonded one.
-    function requestCancellation() public {
+    function requestCancellation() external {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         cancellationRequest = true;
     }
 
     // sets cancellation request to false, if the caller is deployer.
     // starts accepting new executors
-    function resume() public {
+    function resume() external {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         cancellationRequest = false;
     }
