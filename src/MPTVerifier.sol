@@ -11,6 +11,8 @@ import "./RLPParser.sol";
 library MPTVerifier {
     using RLPParser for bytes;
 
+    error ExpectedRLPList();
+
     /**
      * @dev Verify receipt inclusion using Merkle Patricia Trie proof
      * @param receiptRlp RLP-encoded transaction receipt
@@ -49,7 +51,7 @@ library MPTVerifier {
     {
         // Parse the RLP array header
         uint256 arrayOffset = 0;
-        require(proofArray[0] >= 0xc0, "Expected RLP list for proof nodes");
+        if (proofArray[0] < 0xc0) revert ExpectedRLPList();
 
         if (proofArray[0] >= 0xf8) {
             uint256 lengthBytes = uint8(proofArray[0]) - 0xf7;
@@ -128,7 +130,7 @@ library MPTVerifier {
         uint256 items = 0;
         while (offset < data.length) {
             offset += data.getItemLength(offset);
-            items++;
+            unchecked { ++items; }
         }
         return items;
     }
@@ -154,8 +156,9 @@ library MPTVerifier {
         if (keyOffset >= key.length * 2) {
             // Check value in branch node (at index 16)
             uint256 valueOffset = nodeOffset;
-            for (uint256 i = 0; i < 16; i++) {
+            for (uint256 i = 0; i < 16;) {
                 valueOffset += node.getItemLength(valueOffset);
+                unchecked { ++i; }
             }
             (bytes memory nodeValue,) = node.parseItem(valueOffset);
             if (keccak256(nodeValue) == keccak256(value)) {
@@ -175,8 +178,9 @@ library MPTVerifier {
 
         // Get the branch at this nibble
         uint256 branchOffset = nodeOffset;
-        for (uint256 i = 0; i < nibble; i++) {
+        for (uint256 i = 0; i < nibble;) {
             branchOffset += node.getItemLength(branchOffset);
+            unchecked { ++i; }
         }
 
         (bytes memory nextHash,) = node.parseItem(branchOffset);
@@ -272,15 +276,17 @@ library MPTVerifier {
         if (isOdd) {
             result = new bytes(nodeKey.length * 2 - 1);
             result[0] = bytes1(firstByte & 0x0f);
-            for (uint256 i = 1; i < nodeKey.length; i++) {
+            for (uint256 i = 1; i < nodeKey.length;) {
                 result[i * 2 - 1] = bytes1(uint8(nodeKey[i]) >> 4);
                 result[i * 2] = bytes1(uint8(nodeKey[i]) & 0x0f);
+                unchecked { ++i; }
             }
         } else {
             result = new bytes(nodeKey.length * 2 - 2);
-            for (uint256 i = 1; i < nodeKey.length; i++) {
+            for (uint256 i = 1; i < nodeKey.length;) {
                 result[(i - 1) * 2] = bytes1(uint8(nodeKey[i]) >> 4);
                 result[(i - 1) * 2 + 1] = bytes1(uint8(nodeKey[i]) & 0x0f);
+                unchecked { ++i; }
             }
         }
 
@@ -297,7 +303,7 @@ library MPTVerifier {
     function compareKeys(bytes memory key, uint256 offset, bytes memory nodeKey) private pure returns (bool) {
         if (offset + nodeKey.length > key.length * 2) return false;
 
-        for (uint256 i = 0; i < nodeKey.length; i++) {
+        for (uint256 i = 0; i < nodeKey.length;) {
             uint8 keyNibble;
             if ((offset + i) % 2 == 0) {
                 keyNibble = uint8(key[(offset + i) / 2]) >> 4;
@@ -308,6 +314,7 @@ library MPTVerifier {
             if (keyNibble != uint8(nodeKey[i])) {
                 return false;
             }
+            unchecked { ++i; }
         }
 
         return true;

@@ -3,6 +3,8 @@ pragma solidity ^0.8.30;
 
 import {Test} from "forge-std/Test.sol";
 import {EscrowNative} from "../src/EscrowNative.sol";
+import {EscrowBase} from "../src/EscrowBase.sol";
+import {ReceiptValidator} from "../src/ReceiptValidator.sol";
 
 contract EscrowNativeTest is Test {
     EscrowNative public escrow;
@@ -49,7 +51,7 @@ contract EscrowNativeTest is Test {
 
     function testConstructorNativeIncorrectAmount() public {
         vm.prank(deployer);
-        vm.expectRevert("Incorrect ETH amount");
+        vm.expectRevert(EscrowNative.IncorrectETHAmount.selector);
         new EscrowNative{value: 0.5 ether}( // Wrong amount - should be 1 ether
             recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT
         );
@@ -57,7 +59,7 @@ contract EscrowNativeTest is Test {
 
     function testConstructorNativeZeroValueWithAmounts() public {
         vm.prank(deployer);
-        vm.expectRevert("Incorrect ETH amount");
+        vm.expectRevert(EscrowNative.IncorrectETHAmount.selector);
         new EscrowNative{value: 0}(recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
     }
 
@@ -82,7 +84,7 @@ contract EscrowNativeTest is Test {
         vm.startPrank(deployer);
         EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
 
-        vm.expectRevert("Reward amount must be non-zero");
+        vm.expectRevert(EscrowNative.ZeroRewardAmount.selector);
         unfundedEscrow.fund{value: PAYMENT_AMOUNT}(0, PAYMENT_AMOUNT);
         vm.stopPrank();
     }
@@ -92,13 +94,13 @@ contract EscrowNativeTest is Test {
         EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
 
         vm.prank(executor);
-        vm.expectRevert("Only callable by the deployer");
+        vm.expectRevert(EscrowBase.OnlyDeployer.selector);
         unfundedEscrow.fund{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
     }
 
     function testFundNativeAlreadyFunded() public {
         vm.prank(deployer);
-        vm.expectRevert("Contract already funded");
+        vm.expectRevert(EscrowNative.AlreadyFunded.selector);
         escrow.fund{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
     }
 
@@ -106,7 +108,7 @@ contract EscrowNativeTest is Test {
         vm.startPrank(deployer);
         EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
 
-        vm.expectRevert("Incorrect ETH amount");
+        vm.expectRevert(EscrowNative.IncorrectETHAmount.selector);
         unfundedEscrow.fund{value: 0.5 ether}(REWARD_AMOUNT, PAYMENT_AMOUNT);
         vm.stopPrank();
     }
@@ -127,7 +129,7 @@ contract EscrowNativeTest is Test {
         EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
 
         vm.prank(executor);
-        vm.expectRevert("Contract not funded");
+        vm.expectRevert(EscrowBase.NotFunded.selector);
         unfundedEscrow.bond{value: BOND_AMOUNT}();
     }
 
@@ -136,13 +138,13 @@ contract EscrowNativeTest is Test {
         escrow.requestCancellation();
 
         vm.prank(executor);
-        vm.expectRevert("Cancellation requested");
+        vm.expectRevert(EscrowBase.CancellationRequested.selector);
         escrow.bond{value: BOND_AMOUNT}();
     }
 
     function testBondNativeInsufficientAmount() public {
         vm.prank(executor);
-        vm.expectRevert("Bond must be at least half of reward amount");
+        vm.expectRevert(EscrowBase.InsufficientBond.selector);
         escrow.bond{value: BOND_AMOUNT / 4}();
     }
 
@@ -174,7 +176,7 @@ contract EscrowNativeTest is Test {
 
         vm.startPrank(other);
 
-        vm.expectRevert("Bond must be at least half of reward amount");
+        vm.expectRevert(EscrowBase.InsufficientBond.selector);
         escrow.bond{value: BOND_AMOUNT}();
 
         escrow.bond{value: minimumRequiredBond}();
@@ -217,7 +219,7 @@ contract EscrowNativeTest is Test {
         });
 
         vm.prank(executor);
-        vm.expectRevert("Contract not funded");
+        vm.expectRevert(EscrowBase.NotFunded.selector);
         unfundedEscrow.collect(dummyProof, block.number - 1);
     }
 
@@ -234,7 +236,7 @@ contract EscrowNativeTest is Test {
         });
 
         vm.prank(other);
-        vm.expectRevert("Only bonded executor can collect");
+        vm.expectRevert(EscrowBase.OnlyBondedExecutor.selector);
         escrow.collect(dummyProof, block.number - 1);
     }
 
@@ -253,7 +255,7 @@ contract EscrowNativeTest is Test {
         });
 
         vm.prank(executor);
-        vm.expectRevert("Only bonded executor can collect");
+        vm.expectRevert(EscrowBase.OnlyBondedExecutor.selector);
         escrow.collect(dummyProof, block.number - 1);
     }
 
@@ -274,13 +276,13 @@ contract EscrowNativeTest is Test {
         EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
 
         vm.prank(deployer);
-        vm.expectRevert("Contract not funded");
+        vm.expectRevert(EscrowBase.NotFunded.selector);
         unfundedEscrow.withdraw();
     }
 
     function testWithdrawNativeOnlyDeployer() public {
         vm.prank(executor);
-        vm.expectRevert("Only callable by the deployer");
+        vm.expectRevert(EscrowBase.OnlyDeployer.selector);
         escrow.withdraw();
     }
 
@@ -288,7 +290,7 @@ contract EscrowNativeTest is Test {
         _bondExecutor();
 
         vm.prank(deployer);
-        vm.expectRevert("Cannot reset while bond is active");
+        vm.expectRevert(EscrowBase.BondActive.selector);
         escrow.withdraw();
     }
 
@@ -317,7 +319,7 @@ contract EscrowNativeTest is Test {
         _bondExecutor();
 
         vm.prank(other);
-        vm.expectRevert("Another executor is already bonded");
+        vm.expectRevert(EscrowBase.ExecutorAlreadyBonded.selector);
         escrow.bond{value: BOND_AMOUNT}();
     }
 
@@ -328,7 +330,7 @@ contract EscrowNativeTest is Test {
         assertTrue(escrow.is_bonded());
 
         vm.prank(other);
-        vm.expectRevert("Another executor is already bonded");
+        vm.expectRevert(EscrowBase.ExecutorAlreadyBonded.selector);
         escrow.bond{value: BOND_AMOUNT}();
 
         assertEq(escrow.bondedExecutor(), executor);
@@ -414,7 +416,7 @@ contract EscrowNativeTest is Test {
 }
 
 // Helper contract to test ReceiptValidator with calldata
-import {ReceiptValidator} from "../src/ReceiptValidator.sol";
+// ReceiptValidator is already imported below for the wrapper
 
 contract ReceiptValidatorWrapper {
     function validateReceiptStatus(bytes calldata receiptRlp) external pure returns (bool) {
@@ -449,7 +451,7 @@ contract ReceiptValidatorTest is Test {
             hex"02f901a880840114e0a3b9010000000000000000000000000000000880000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000010000000000000200000000000004000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000001000000000000000000000000000f89df89b94be41a9ec942d5b52be07cc7f4d7e30e10e9b652af863a0ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3efa0000000000000000000000000e1a9d9c9abb872ddef70a4d108fd8fc3c7ce4dc4a0000000000000000000000000658d9c76ff358984d6436ea11ee1eda08894c818a000000000000000000000000000000000000000000000000000000000017d7840";
 
         // Should revert with "Receipt status is not success"
-        vm.expectRevert("Receipt status is not success");
+        vm.expectRevert(ReceiptValidator.ReceiptStatusNotSuccess.selector);
         wrapper.validateReceiptStatus(failedReceipt);
     }
 
@@ -470,7 +472,7 @@ contract ReceiptValidatorTest is Test {
         bytes memory legacyFailedReceipt =
             hex"f901a880840114e0a3b9010000000000000000000000000000000880000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000010000000000000200000000000004000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000001000000000000000000000000000f89df89b94be41a9ec942d5b52be07cc7f4d7e30e10e9b652af863a0ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3efa0000000000000000000000000e1a9d9c9abb872ddef70a4d108fd8fc3c7ce4dc4a0000000000000000000000000658d9c76ff358984d6436ea11ee1eda08894c818a000000000000000000000000000000000000000000000000000000000017d7840";
 
-        vm.expectRevert("Receipt status is not success");
+        vm.expectRevert(ReceiptValidator.ReceiptStatusNotSuccess.selector);
         wrapper.validateReceiptStatus(legacyFailedReceipt);
     }
 }

@@ -4,6 +4,18 @@ pragma solidity 0.8.30;
 import "./EscrowBase.sol";
 
 contract EscrowNative is EscrowBase {
+    // Custom errors
+    error IncorrectETHAmount();
+    error AlreadyFunded();
+    error ZeroRewardAmount();
+    error ZeroPaymentAmount();
+    error InvalidTxProof();
+    error InvalidReceiptProof();
+    error TxFailed();
+    error InvalidNativeTransfer();
+    error ETHTransferFailed();
+    error NoWithdrawableFunds();
+
     // Proof structure for native ETH transfers (requires both tx and receipt)
     struct NativeTransferProof {
         bytes blockHeader; // RLP-encoded block header
@@ -21,7 +33,7 @@ contract EscrowNative is EscrowBase {
         uint256 _currentPaymentAmount
     ) payable EscrowBase(_expectedRecipient, _expectedAmount) {
         if (_currentRewardAmount > 0 && _currentPaymentAmount > 0) {
-            require(msg.value == _currentRewardAmount + _currentPaymentAmount, "Incorrect ETH amount");
+            if (msg.value != _currentRewardAmount + _currentPaymentAmount) revert IncorrectETHAmount();
             currentRewardAmount = _currentRewardAmount;
             originalRewardAmount = _currentRewardAmount;
             currentPaymentAmount = _currentPaymentAmount;
@@ -30,11 +42,11 @@ contract EscrowNative is EscrowBase {
     }
 
     function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) public payable {
-        require(msg.sender == deployerAddress, "Only callable by the deployer");
-        require(!funded, "Contract already funded");
-        require(_currentRewardAmount > 0, "Reward amount must be non-zero");
-        require(_currentPaymentAmount > 0, "Payment amount must be non-zero");
-        require(msg.value == _currentRewardAmount + _currentPaymentAmount, "Incorrect ETH amount");
+        if (msg.sender != deployerAddress) revert OnlyDeployer();
+        if (funded) revert AlreadyFunded();
+        if (_currentRewardAmount == 0) revert ZeroRewardAmount();
+        if (_currentPaymentAmount == 0) revert ZeroPaymentAmount();
+        if (msg.value != _currentRewardAmount + _currentPaymentAmount) revert IncorrectETHAmount();
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
@@ -58,26 +70,23 @@ contract EscrowNative is EscrowBase {
 
         // Verify transaction inclusion in transactions trie
         bytes32 transactionsRoot = BlockHeaderParser.extractTransactionsRoot(proof.blockHeader);
-        require(
-            MPTVerifier.verifyReceiptProof(proof.transactionRlp, proof.txProofNodes, proof.path, transactionsRoot),
-            "Invalid transaction MPT proof"
-        );
+        if (!MPTVerifier.verifyReceiptProof(proof.transactionRlp, proof.txProofNodes, proof.path, transactionsRoot)) {
+            revert InvalidTxProof();
+        }
 
         // Verify receipt inclusion in receipts trie
         bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(proof.blockHeader);
-        require(
-            MPTVerifier.verifyReceiptProof(proof.receiptRlp, proof.receiptProofNodes, proof.path, receiptsRoot),
-            "Invalid receipt MPT proof"
-        );
+        if (!MPTVerifier.verifyReceiptProof(proof.receiptRlp, proof.receiptProofNodes, proof.path, receiptsRoot)) {
+            revert InvalidReceiptProof();
+        }
 
         // Validate transaction succeeded (status == 1)
-        require(ReceiptValidator.validateReceiptStatus(proof.receiptRlp), "Transaction failed (status != 1)");
+        if (!ReceiptValidator.validateReceiptStatus(proof.receiptRlp)) revert TxFailed();
 
         // Validate the native ETH transfer (to and value fields)
-        require(
-            ReceiptValidator.validateNativeTransfer(proof.transactionRlp, expectedRecipient, expectedAmount),
-            "Invalid native transfer"
-        );
+        if (!ReceiptValidator.validateNativeTransfer(proof.transactionRlp, expectedRecipient, expectedAmount)) {
+            revert InvalidNativeTransfer();
+        }
 
         _payout();
     }
@@ -89,7 +98,7 @@ contract EscrowNative is EscrowBase {
         _clearPayoutState();
 
         (bool success,) = executor.call{value: payout}("");
-        require(success, "ETH transfer failed");
+        if (!success) revert ETHTransferFailed();
     }
 
     // allows deployer to withdraw all assets except the seized bonds (so the deployer can withdraw only and only what was deposited by deployer in the start function)
@@ -102,9 +111,9 @@ contract EscrowNative is EscrowBase {
 
         _clearWithdrawState();
 
-        require(withdrawableAmount > 0, "No withdrawable funds");
+        if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 
         (bool success,) = msg.sender.call{value: withdrawableAmount}("");
-        require(success, "ETH transfer failed");
+        if (!success) revert ETHTransferFailed();
     }
 }

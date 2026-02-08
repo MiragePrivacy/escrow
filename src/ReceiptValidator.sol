@@ -11,6 +11,18 @@ import "./RLPParser.sol";
 library ReceiptValidator {
     using RLPParser for bytes;
 
+    // Custom errors
+    error InvalidRLP();
+    error InvalidAddress();
+    error WrongTokenContract();
+    error WrongEventSignature();
+    error ToAddressMismatch();
+    error AmountMismatch();
+    error ExpectedStringData();
+    error ReceiptStatusNotSuccess();
+    error UnsupportedTxType();
+    error RecipientMismatch();
+
     // Pre-computed Transfer(address,address,uint256) event signature
     bytes32 private constant TRANSFER_EVENT_SIG = 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef;
 
@@ -37,7 +49,7 @@ library ReceiptValidator {
         }
 
         // Skip RLP list prefix
-        require(uint8(receiptRlp[offset]) >= 0xc0, "Invalid receipt RLP");
+        if (uint8(receiptRlp[offset]) < 0xc0) revert InvalidRLP();
         if (uint8(receiptRlp[offset]) >= 0xf8) {
             offset += 1 + (uint8(receiptRlp[offset]) - 0xf7);
         } else {
@@ -45,12 +57,13 @@ library ReceiptValidator {
         }
 
         // Skip status, cumulativeGasUsed, bloom to get to logs
-        for (uint256 i = 0; i < 3; i++) {
+        for (uint256 i = 0; i < 3;) {
             offset = receiptRlp.skipItem(offset);
+            unchecked { ++i; }
         }
 
         // Now at logs array
-        require(uint8(receiptRlp[offset]) >= 0xc0, "Invalid logs RLP");
+        if (uint8(receiptRlp[offset]) < 0xc0) revert InvalidRLP();
         if (uint8(receiptRlp[offset]) >= 0xf8) {
             offset += 1 + (uint8(receiptRlp[offset]) - 0xf7);
         } else {
@@ -58,8 +71,9 @@ library ReceiptValidator {
         }
 
         // Navigate to target log
-        for (uint256 i = 0; i < logIndex; i++) {
+        for (uint256 i = 0; i < logIndex;) {
             offset = receiptRlp.skipItem(offset);
+            unchecked { ++i; }
         }
 
         // Validate the target log
@@ -85,7 +99,7 @@ library ReceiptValidator {
         uint256 offset = logOffset;
 
         // Parse target log: [address, topics[], data]
-        require(uint8(receiptRlp[offset]) >= 0xc0, "Invalid log RLP");
+        if (uint8(receiptRlp[offset]) < 0xc0) revert InvalidRLP();
         if (uint8(receiptRlp[offset]) >= 0xf8) {
             offset += 1 + (uint8(receiptRlp[offset]) - 0xf7);
         } else {
@@ -94,14 +108,14 @@ library ReceiptValidator {
 
         // Parse emitter address (should be the token contract)
         (bytes memory addrBytes, uint256 addrLen) = parseAddressFromRLP(receiptRlp, offset);
-        require(addrBytes.length == 20, "Invalid emitter address length");
+        if (addrBytes.length != 20) revert InvalidAddress();
 
         // Extract emitter address
         address emitter;
         assembly {
             emitter := mload(add(addrBytes, 20))
         }
-        require(emitter == tokenContract, "Wrong token contract");
+        if (emitter != tokenContract) revert WrongTokenContract();
         offset += addrLen;
 
         // Parse and validate topics
@@ -120,19 +134,20 @@ library ReceiptValidator {
         pure
         returns (bytes memory result, uint256 length)
     {
-        require(offset < data.length, "RLP offset out of bounds");
+        if (offset >= data.length) revert InvalidRLP();
 
         uint8 prefix = uint8(data[offset]);
 
         if (prefix == 0x94) {
             // Address is 20 bytes with prefix 0x94
             result = new bytes(20);
-            for (uint256 i = 0; i < 20; i++) {
+            for (uint256 i = 0; i < 20;) {
                 result[i] = data[offset + 1 + i];
+                unchecked { ++i; }
             }
             return (result, 21);
         } else {
-            revert("Invalid address RLP encoding");
+            revert InvalidAddress();
         }
     }
 
@@ -153,7 +168,7 @@ library ReceiptValidator {
         uint256 offset = topicsOffset;
 
         // Parse topics array
-        require(uint8(receiptRlp[offset]) >= 0xc0, "Invalid topics RLP");
+        if (uint8(receiptRlp[offset]) < 0xc0) revert InvalidRLP();
         if (uint8(receiptRlp[offset]) >= 0xf8) {
             offset += 1 + (uint8(receiptRlp[offset]) - 0xf7);
         } else {
@@ -162,7 +177,7 @@ library ReceiptValidator {
 
         // Check first topic (event signature)
         bytes32 eventSig = receiptRlp.extractBytes32(offset);
-        require(eventSig == TRANSFER_EVENT_SIG, "Wrong event signature");
+        if (eventSig != TRANSFER_EVENT_SIG) revert WrongEventSignature();
 
         // Check second topic (from address) --skip validation
         offset = receiptRlp.skipItem(offset);
@@ -170,19 +185,20 @@ library ReceiptValidator {
         // Check third topic (to address)
         offset = receiptRlp.skipItem(offset);
         bytes32 logToAddr = receiptRlp.extractBytes32(offset);
-        require(address(uint160(uint256(logToAddr))) == toAddress, "To address mismatch");
+        if (address(uint160(uint256(logToAddr))) != toAddress) revert ToAddressMismatch();
 
         // Parse and validate data payload (amount)
         offset = receiptRlp.skipItem(topicsOffset); // Skip entire topics array
         (bytes memory dataBytes,) = parseDataFromRLP(receiptRlp, offset);
 
         // Convert data bytes to uint256 (amount)
-        require(dataBytes.length <= 32, "Amount data too long");
+        if (dataBytes.length > 32) revert InvalidRLP();
         uint256 logAmount = 0;
-        for (uint256 i = 0; i < dataBytes.length; i++) {
+        for (uint256 i = 0; i < dataBytes.length;) {
             logAmount = (logAmount << 8) | uint8(dataBytes[i]);
+            unchecked { ++i; }
         }
-        require(logAmount == expectedAmount, "Transfer amount mismatch");
+        if (logAmount != expectedAmount) revert AmountMismatch();
 
         return true;
     }
@@ -199,7 +215,7 @@ library ReceiptValidator {
         pure
         returns (bytes memory result, uint256 length)
     {
-        require(offset < data.length, "RLP offset out of bounds");
+        if (offset >= data.length) revert InvalidRLP();
 
         uint8 prefix = uint8(data[offset]);
 
@@ -212,24 +228,27 @@ library ReceiptValidator {
             // Short string
             uint256 dataLength = prefix - 0x80;
             result = new bytes(dataLength);
-            for (uint256 i = 0; i < dataLength; i++) {
+            for (uint256 i = 0; i < dataLength;) {
                 result[i] = data[offset + 1 + i];
+                unchecked { ++i; }
             }
             return (result, 1 + dataLength);
         } else if (prefix < 0xc0) {
             // Long string
             uint256 lengthBytes = prefix - 0xb7;
             uint256 dataLength = 0;
-            for (uint256 i = 0; i < lengthBytes; i++) {
+            for (uint256 i = 0; i < lengthBytes;) {
                 dataLength = (dataLength << 8) | uint8(data[offset + 1 + i]);
+                unchecked { ++i; }
             }
             result = new bytes(dataLength);
-            for (uint256 i = 0; i < dataLength; i++) {
+            for (uint256 i = 0; i < dataLength;) {
                 result[i] = data[offset + 1 + lengthBytes + i];
+                unchecked { ++i; }
             }
             return (result, 1 + lengthBytes + dataLength);
         } else {
-            revert("Expected string data, got list");
+            revert ExpectedStringData();
         }
     }
 
@@ -247,7 +266,7 @@ library ReceiptValidator {
         }
 
         // Skip RLP list prefix
-        require(uint8(receiptRlp[offset]) >= 0xc0, "Invalid receipt RLP");
+        if (uint8(receiptRlp[offset]) < 0xc0) revert InvalidRLP();
         if (uint8(receiptRlp[offset]) >= 0xf8) {
             offset += 1 + (uint8(receiptRlp[offset]) - 0xf7);
         } else {
@@ -261,7 +280,7 @@ library ReceiptValidator {
         // Status must be 0x01 (success)
         // 0x80 means empty byte string (status = 0, failed)
         // 0x01 means single byte with value 1 (success)
-        require(statusByte == 0x01, "Receipt status is not success");
+        if (statusByte != 0x01) revert ReceiptStatusNotSuccess();
 
         return true;
     }
@@ -286,26 +305,27 @@ library ReceiptValidator {
             } else if (txType == 0x02) {
                 toIndex = 5; // EIP-1559: [chainId, nonce, maxPriorityFee, maxFee, gasLimit, to, value, ...]
             } else {
-                revert("Unsupported tx type");
+                revert UnsupportedTxType();
             }
         }
 
         // Skip list prefix
-        require(uint8(txRlp[offset]) >= 0xc0, "Invalid tx RLP");
+        if (uint8(txRlp[offset]) < 0xc0) revert InvalidRLP();
         offset += uint8(txRlp[offset]) >= 0xf8 ? 1 + (uint8(txRlp[offset]) - 0xf7) : 1;
 
         // Skip to 'to' field
-        for (uint256 i = 0; i < toIndex; i++) {
+        for (uint256 i = 0; i < toIndex;) {
             offset = txRlp.skipItem(offset);
+            unchecked { ++i; }
         }
 
         // Validate 'to' address (0x94 prefix = 20 byte string)
-        require(uint8(txRlp[offset]) == 0x94, "Invalid to address");
+        if (uint8(txRlp[offset]) != 0x94) revert InvalidAddress();
         address to;
         assembly {
             to := shr(96, calldataload(add(txRlp.offset, add(offset, 1))))
         }
-        require(to == expectedRecipient, "Recipient mismatch");
+        if (to != expectedRecipient) revert RecipientMismatch();
         offset += 21;
 
         // Validate 'value'
@@ -317,11 +337,12 @@ library ReceiptValidator {
             value = 0;
         } else {
             uint256 len = prefix - 0x80;
-            for (uint256 i = 0; i < len; i++) {
+            for (uint256 i = 0; i < len;) {
                 value = (value << 8) | uint8(txRlp[offset + 1 + i]);
+                unchecked { ++i; }
             }
         }
-        require(value == expectedAmount, "Amount mismatch");
+        if (value != expectedAmount) revert AmountMismatch();
 
         return true;
     }

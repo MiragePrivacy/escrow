@@ -11,6 +11,16 @@ interface IERC20 {
 }
 
 contract EscrowERC20 is EscrowBase {
+    // Custom errors
+    error ZeroAddress();
+    error AlreadyFunded();
+    error ZeroRewardAmount();
+    error ZeroPaymentAmount();
+    error TokenTransferFailed();
+    error InvalidReceiptProof();
+    error InvalidTransferEvent();
+    error NoWithdrawableFunds();
+
     address public immutable tokenContract; // The tokens used in the escrow
 
     // Based on Nomad's proof structure
@@ -29,7 +39,7 @@ contract EscrowERC20 is EscrowBase {
         uint256 _currentRewardAmount,
         uint256 _currentPaymentAmount
     ) EscrowBase(_expectedRecipient, _expectedAmount) {
-        require(_tokenContract != address(0), "Token contract cannot be zero address");
+        if (_tokenContract == address(0)) revert ZeroAddress();
         tokenContract = _tokenContract;
 
         if (_currentRewardAmount > 0 && _currentPaymentAmount > 0) {
@@ -39,18 +49,17 @@ contract EscrowERC20 is EscrowBase {
 
     // takes currentRewardAmount + currentPaymentAmount from the deployer's balance from the tokenContract.
     function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) public {
-        require(msg.sender == deployerAddress, "Only callable by the deployer");
-        require(!funded, "Contract already funded");
-        require(_currentRewardAmount > 0, "Reward amount must be non-zero");
-        require(_currentPaymentAmount > 0, "Payment amount must be non-zero");
+        if (msg.sender != deployerAddress) revert OnlyDeployer();
+        if (funded) revert AlreadyFunded();
+        if (_currentRewardAmount == 0) revert ZeroRewardAmount();
+        if (_currentPaymentAmount == 0) revert ZeroPaymentAmount();
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
         currentPaymentAmount = _currentPaymentAmount;
-        require(
-            IERC20(tokenContract).transferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount),
-            "Token transfer failed"
-        );
+        if (!IERC20(tokenContract).transferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount)) {
+            revert TokenTransferFailed();
+        }
         funded = true;
     }
 
@@ -61,10 +70,9 @@ contract EscrowERC20 is EscrowBase {
 
         _validateBondRequirements(_bondAmount);
 
-        require(
-            IERC20(tokenContract).transferFrom(msg.sender, address(this), _bondAmount),
-            "Token transfer failed"
-        );
+        if (!IERC20(tokenContract).transferFrom(msg.sender, address(this), _bondAmount)) {
+            revert TokenTransferFailed();
+        }
 
         _setBondData(_bondAmount);
     }
@@ -75,18 +83,16 @@ contract EscrowERC20 is EscrowBase {
 
         // Extract receipts root and verify receipt inclusion
         bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(proof.blockHeader);
-        require(
-            MPTVerifier.verifyReceiptProof(proof.receiptRlp, proof.proofNodes, proof.receiptPath, receiptsRoot),
-            "Invalid receipt MPT proof"
-        );
+        if (!MPTVerifier.verifyReceiptProof(proof.receiptRlp, proof.proofNodes, proof.receiptPath, receiptsRoot)) {
+            revert InvalidReceiptProof();
+        }
 
         // Validate the Transfer event
-        require(
-            ReceiptValidator.validateTransferInReceipt(
+        if (!ReceiptValidator.validateTransferInReceipt(
                 proof.receiptRlp, proof.logIndex, tokenContract, expectedRecipient, expectedAmount
-            ),
-            "Invalid Transfer event"
-        );
+            )) {
+            revert InvalidTransferEvent();
+        }
 
         _payout();
     }
@@ -104,7 +110,7 @@ contract EscrowERC20 is EscrowBase {
         } else {
             success = IERC20(tokenContract).transfer(executor, payout);
         }
-        require(success, "Token transfer failed");
+        if (!success) revert TokenTransferFailed();
     }
 
     // allows deployer to withdraw all assets except the seized bonds (so the deployer can withdraw only and only what was deposited by deployer in the start function)
@@ -117,11 +123,10 @@ contract EscrowERC20 is EscrowBase {
 
         _clearWithdrawState();
 
-        require(withdrawableAmount > 0, "No withdrawable funds");
+        if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 
-        require(
-            IERC20(tokenContract).transfer(msg.sender, withdrawableAmount),
-            "Token transfer failed"
-        );
+        if (!IERC20(tokenContract).transfer(msg.sender, withdrawableAmount)) {
+            revert TokenTransferFailed();
+        }
     }
 }

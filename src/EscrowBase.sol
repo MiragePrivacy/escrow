@@ -6,6 +6,20 @@ import "./MPTVerifier.sol";
 import "./ReceiptValidator.sol";
 
 abstract contract EscrowBase {
+    // Custom errors
+    error OnlyDeployer();
+    error NotFunded();
+    error OnlyBondedExecutor();
+    error TargetBlockInFuture();
+    error TargetBlockTooOld();
+    error BlockHashUnavailable();
+    error BlockHeaderMismatch();
+    error BlockNumberMismatch();
+    error BondActive();
+    error CancellationRequested();
+    error ExecutorAlreadyBonded();
+    error InsufficientBond();
+
     // The following variables are set up in the constructor.
     address immutable deployerAddress;
     uint256 public currentRewardAmount;
@@ -35,14 +49,14 @@ abstract contract EscrowBase {
     // only deployer can call this. will set the cancellation request to true.
     // when the cancellation is requested, the bonded executor may still finish their job and collect, but no new executor is accepted after the current bonded one.
     function requestCancellation() public {
-        require(msg.sender == deployerAddress, "Only callable by the deployer");
+        if (msg.sender != deployerAddress) revert OnlyDeployer();
         cancellationRequest = true;
     }
 
     // sets cancellation request to false, if the caller is deployer.
     // starts accepting new executors
     function resume() public {
-        require(msg.sender == deployerAddress, "Only callable by the deployer");
+        if (msg.sender != deployerAddress) revert OnlyDeployer();
         cancellationRequest = false;
     }
 
@@ -53,20 +67,20 @@ abstract contract EscrowBase {
 
     // Internal helper to validate block header for proof verification
     function _validateBlockHeader(bytes calldata blockHeader, uint256 targetBlockNumber) internal view {
-        require(funded, "Contract not funded");
-        require(msg.sender == bondedExecutor && is_bonded(), "Only bonded executor can collect");
-        require(targetBlockNumber <= block.number, "Target block is in the future");
-        require(block.number - targetBlockNumber <= maxBlockLookback, "Target block too old");
+        if (!funded) revert NotFunded();
+        if (msg.sender != bondedExecutor || !is_bonded()) revert OnlyBondedExecutor();
+        if (targetBlockNumber > block.number) revert TargetBlockInFuture();
+        if (block.number - targetBlockNumber > maxBlockLookback) revert TargetBlockTooOld();
 
         bytes32 targetBlockHash = blockhash(targetBlockNumber);
-        require(targetBlockHash != bytes32(0), "Unable to retrieve block hash");
-        require(keccak256(blockHeader) == targetBlockHash, "Block header hash mismatch");
-        require(BlockHeaderParser.extractBlockNumber(blockHeader) == targetBlockNumber, "Header block number mismatch");
+        if (targetBlockHash == bytes32(0)) revert BlockHashUnavailable();
+        if (keccak256(blockHeader) != targetBlockHash) revert BlockHeaderMismatch();
+        if (BlockHeaderParser.extractBlockNumber(blockHeader) != targetBlockNumber) revert BlockNumberMismatch();
     }
 
     // Internal helper to reset bond data when expired
     function _tryResetBondData() internal {
-        require(!is_bonded(), "Cannot reset while bond is active");
+        if (is_bonded()) revert BondActive();
 
         bondedExecutor = address(0);
         bondAmount = 0;
@@ -84,10 +98,10 @@ abstract contract EscrowBase {
 
     // Internal helper to validate bond requirements
     function _validateBondRequirements(uint256 _bondAmount) internal view {
-        require(funded, "Contract not funded");
-        require(!cancellationRequest, "Cancellation requested");
-        require(!is_bonded(), "Another executor is already bonded");
-        require(_bondAmount >= currentRewardAmount / 2, "Bond must be at least half of reward amount");
+        if (!funded) revert NotFunded();
+        if (cancellationRequest) revert CancellationRequested();
+        if (is_bonded()) revert ExecutorAlreadyBonded();
+        if (_bondAmount < currentRewardAmount / 2) revert InsufficientBond();
     }
 
     // Internal helper to set bond data
@@ -114,8 +128,8 @@ abstract contract EscrowBase {
 
     // Internal helper to validate withdraw requirements
     function _validateWithdraw() internal view {
-        require(funded, "Contract not funded");
-        require(msg.sender == deployerAddress, "Only callable by the deployer");
+        if (!funded) revert NotFunded();
+        if (msg.sender != deployerAddress) revert OnlyDeployer();
     }
 
     // Internal helper to calculate withdrawable amount and clear state

@@ -79,17 +79,17 @@ contract TempoTest is Test {
     }
 
     function testRejectWrongAmount() public {
-        vm.expectRevert("Transfer amount mismatch");
+        vm.expectRevert(ReceiptValidator.AmountMismatch.selector);
         validator.validateTransferInReceipt(RECEIPT_RLP, 0, TOKEN, TO_ADDRESS, AMOUNT + 1);
     }
 
     function testRejectWrongRecipient() public {
-        vm.expectRevert("To address mismatch");
+        vm.expectRevert(ReceiptValidator.ToAddressMismatch.selector);
         validator.validateTransferInReceipt(RECEIPT_RLP, 0, TOKEN, address(0xdead), AMOUNT);
     }
 
     function testRejectWrongToken() public {
-        vm.expectRevert("Wrong token contract");
+        vm.expectRevert(ReceiptValidator.WrongTokenContract.selector);
         validator.validateTransferInReceipt(RECEIPT_RLP, 0, address(0xbeef), TO_ADDRESS, AMOUNT);
     }
 
