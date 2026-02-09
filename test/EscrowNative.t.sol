@@ -32,10 +32,7 @@ contract EscrowNativeTest is Test {
         // Deploy escrow with native ETH funding in constructor
         vm.prank(deployer);
         escrow = new EscrowNative{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(
-            recipient,
-            EXPECTED_AMOUNT,
-            REWARD_AMOUNT,
-            PAYMENT_AMOUNT
+            recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT
         );
     }
 

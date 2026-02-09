@@ -59,7 +59,9 @@ library ReceiptValidator {
         // Skip status, cumulativeGasUsed, bloom to get to logs
         for (uint256 i = 0; i < 3;) {
             offset = receiptRlp.skipItem(offset);
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
 
         // Now at logs array
@@ -73,7 +75,9 @@ library ReceiptValidator {
         // Navigate to target log
         for (uint256 i = 0; i < logIndex;) {
             offset = receiptRlp.skipItem(offset);
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
 
         // Validate the target log
@@ -143,7 +147,9 @@ library ReceiptValidator {
             result = new bytes(20);
             for (uint256 i = 0; i < 20;) {
                 result[i] = data[offset + 1 + i];
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             return (result, 21);
         } else {
@@ -196,7 +202,9 @@ library ReceiptValidator {
         uint256 logAmount = 0;
         for (uint256 i = 0; i < dataBytes.length;) {
             logAmount = (logAmount << 8) | uint8(dataBytes[i]);
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
         if (logAmount != expectedAmount) revert AmountMismatch();
 
@@ -230,7 +238,9 @@ library ReceiptValidator {
             result = new bytes(dataLength);
             for (uint256 i = 0; i < dataLength;) {
                 result[i] = data[offset + 1 + i];
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             return (result, 1 + dataLength);
         } else if (prefix < 0xc0) {
@@ -239,12 +249,16 @@ library ReceiptValidator {
             uint256 dataLength = 0;
             for (uint256 i = 0; i < lengthBytes;) {
                 dataLength = (dataLength << 8) | uint8(data[offset + 1 + i]);
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             result = new bytes(dataLength);
             for (uint256 i = 0; i < dataLength;) {
                 result[i] = data[offset + 1 + lengthBytes + i];
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             return (result, 1 + lengthBytes + dataLength);
         } else {
@@ -316,7 +330,9 @@ library ReceiptValidator {
         // Skip to 'to' field
         for (uint256 i = 0; i < toIndex;) {
             offset = txRlp.skipItem(offset);
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
 
         // Validate 'to' address (0x94 prefix = 20 byte string)
@@ -339,7 +355,9 @@ library ReceiptValidator {
             uint256 len = prefix - 0x80;
             for (uint256 i = 0; i < len;) {
                 value = (value << 8) | uint8(txRlp[offset + 1 + i]);
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
         }
         if (value != expectedAmount) revert AmountMismatch();

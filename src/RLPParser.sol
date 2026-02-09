@@ -9,6 +9,7 @@ pragma solidity ^0.8.13;
 library RLPParser {
     error RLPOffsetOutOfBounds();
     error ExpectedBytes32();
+
     /**
      * @dev Skip an RLP item and return new offset
      * @param data The RLP encoded data
@@ -32,7 +33,9 @@ library RLPParser {
             uint256 length = 0;
             for (uint256 i = 0; i < lengthBytes;) {
                 length = (length << 8) | uint8(data[offset + 1 + i]);
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             return offset + 1 + lengthBytes + length;
         } else if (prefix < 0xf8) {
@@ -44,7 +47,9 @@ library RLPParser {
             uint256 length = 0;
             for (uint256 i = 0; i < lengthBytes;) {
                 length = (length << 8) | uint8(data[offset + 1 + i]);
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             return offset + 1 + lengthBytes + length;
         }
@@ -73,7 +78,9 @@ library RLPParser {
             bytes memory result = new bytes(length);
             for (uint256 i = 0; i < length;) {
                 result[i] = data[offset + 1 + i];
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             return (result, 1 + length);
         } else if (prefix < 0xc0) {
@@ -82,12 +89,16 @@ library RLPParser {
             uint256 length = 0;
             for (uint256 i = 0; i < lengthBytes;) {
                 length = (length << 8) | uint8(data[offset + 1 + i]);
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             bytes memory result = new bytes(length);
             for (uint256 i = 0; i < length;) {
                 result[i] = data[offset + 1 + lengthBytes + i];
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             return (result, 1 + lengthBytes + length);
         } else {
@@ -96,7 +107,9 @@ library RLPParser {
             bytes memory result = new bytes(totalLength);
             for (uint256 i = 0; i < totalLength;) {
                 result[i] = data[offset + i];
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             return (result, totalLength);
         }
@@ -122,7 +135,9 @@ library RLPParser {
             uint256 length = 0;
             for (uint256 i = 0; i < lengthBytes;) {
                 length = (length << 8) | uint8(data[offset + 1 + i]);
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             return 1 + lengthBytes + length;
         } else if (prefix < 0xf8) {
@@ -132,7 +147,9 @@ library RLPParser {
             uint256 length = 0;
             for (uint256 i = 0; i < lengthBytes;) {
                 length = (length << 8) | uint8(data[offset + 1 + i]);
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             return 1 + lengthBytes + length;
         }

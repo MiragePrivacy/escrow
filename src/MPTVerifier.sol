@@ -130,7 +130,9 @@ library MPTVerifier {
         uint256 items = 0;
         while (offset < data.length) {
             offset += data.getItemLength(offset);
-            unchecked { ++items; }
+            unchecked {
+                ++items;
+            }
         }
         return items;
     }
@@ -158,7 +160,9 @@ library MPTVerifier {
             uint256 valueOffset = nodeOffset;
             for (uint256 i = 0; i < 16;) {
                 valueOffset += node.getItemLength(valueOffset);
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             (bytes memory nodeValue,) = node.parseItem(valueOffset);
             if (keccak256(nodeValue) == keccak256(value)) {
@@ -180,7 +184,9 @@ library MPTVerifier {
         uint256 branchOffset = nodeOffset;
         for (uint256 i = 0; i < nibble;) {
             branchOffset += node.getItemLength(branchOffset);
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
 
         (bytes memory nextHash,) = node.parseItem(branchOffset);
@@ -279,14 +285,18 @@ library MPTVerifier {
             for (uint256 i = 1; i < nodeKey.length;) {
                 result[i * 2 - 1] = bytes1(uint8(nodeKey[i]) >> 4);
                 result[i * 2] = bytes1(uint8(nodeKey[i]) & 0x0f);
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
         } else {
             result = new bytes(nodeKey.length * 2 - 2);
             for (uint256 i = 1; i < nodeKey.length;) {
                 result[(i - 1) * 2] = bytes1(uint8(nodeKey[i]) >> 4);
                 result[(i - 1) * 2 + 1] = bytes1(uint8(nodeKey[i]) & 0x0f);
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
         }
 
@@ -314,7 +324,9 @@ library MPTVerifier {
             if (keyNibble != uint8(nodeKey[i])) {
                 return false;
             }
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
 
         return true;

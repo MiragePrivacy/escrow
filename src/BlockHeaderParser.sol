@@ -41,7 +41,9 @@ library BlockHeaderParser {
             // Tempo: skip first 3 fields (slot, parent_slot, extra) to get to inner header
             for (uint256 i = 0; i < 3;) {
                 offset = blockHeader.skipItem(offset);
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
 
             // Now skip the inner header's list prefix
@@ -68,7 +70,9 @@ library BlockHeaderParser {
         // [parentHash, sha3Uncles, miner, stateRoot, transactionsRoot, receiptsRoot, logsBloom, difficulty, number, ...]
         for (uint256 i = 0; i < 8;) {
             offset = blockHeader.skipItem(offset);
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
 
         // Extract block number
@@ -78,7 +82,9 @@ library BlockHeaderParser {
         uint256 blockNumber = 0;
         for (uint256 i = 0; i < numBytes.length;) {
             blockNumber = (blockNumber << 8) | uint8(numBytes[i]);
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
 
         return blockNumber;
@@ -96,7 +102,9 @@ library BlockHeaderParser {
         // [parentHash, sha3Uncles, miner, stateRoot, transactionsRoot, receiptsRoot, ...]
         for (uint256 i = 0; i < 5;) {
             offset = blockHeader.skipItem(offset);
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
 
         // Extract receiptsRoot (32 bytes)
@@ -138,7 +146,9 @@ library BlockHeaderParser {
             result = new bytes(itemLength);
             for (uint256 i = 0; i < itemLength;) {
                 result[i] = data[offset + 1 + i];
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             return (result, 1 + itemLength);
         } else if (prefix < 0xc0) {
@@ -147,12 +157,16 @@ library BlockHeaderParser {
             uint256 itemLength = 0;
             for (uint256 i = 0; i < lengthBytes;) {
                 itemLength = (itemLength << 8) | uint8(data[offset + 1 + i]);
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             result = new bytes(itemLength);
             for (uint256 i = 0; i < itemLength;) {
                 result[i] = data[offset + 1 + lengthBytes + i];
-                unchecked { ++i; }
+                unchecked {
+                    ++i;
+                }
             }
             return (result, 1 + lengthBytes + itemLength);
         } else {
@@ -179,7 +193,9 @@ library BlockHeaderParser {
         // Skip first 3 fields to get to stateRoot (index 3)
         for (uint256 i = 0; i < 3;) {
             offset = blockHeader.skipItem(offset);
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
 
         // Extract stateRoot (32 bytes)
@@ -213,7 +229,9 @@ library BlockHeaderParser {
         // Skip first 4 fields to get to transactionsRoot (index 4)
         for (uint256 i = 0; i < 4;) {
             offset = blockHeader.skipItem(offset);
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
 
         // Extract transactionsRoot (32 bytes)
