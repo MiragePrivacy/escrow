@@ -18,7 +18,6 @@ library ReceiptValidator {
     error WrongEventSignature();
     error ToAddressMismatch();
     error AmountMismatch();
-    error ExpectedStringData();
     error ReceiptStatusNotSuccess();
     error UnsupportedTxType();
     error RecipientMismatch();
@@ -111,50 +110,16 @@ library ReceiptValidator {
         }
 
         // Parse emitter address (should be the token contract)
-        (bytes memory addrBytes, uint256 addrLen) = parseAddressFromRLP(receiptRlp, offset);
-        if (addrBytes.length != 20) revert InvalidAddress();
-
-        // Extract emitter address
+        if (uint8(receiptRlp[offset]) != 0x94) revert InvalidAddress();
         address emitter;
         assembly {
-            emitter := mload(add(addrBytes, 20))
+            emitter := shr(96, calldataload(add(receiptRlp.offset, add(offset, 1))))
         }
         if (emitter != tokenContract) revert WrongTokenContract();
-        offset += addrLen;
+        offset += 21;
 
         // Parse and validate topics
         return validateTransferTopics(receiptRlp, offset, toAddress, expectedAmount);
-    }
-
-    /**
-     * @dev Parse address from RLP data
-     * @param data RLP encoded data
-     * @param offset Current offset
-     * @return result Parsed address bytes
-     * @return length Length consumed
-     */
-    function parseAddressFromRLP(bytes calldata data, uint256 offset)
-        private
-        pure
-        returns (bytes memory result, uint256 length)
-    {
-        if (offset >= data.length) revert InvalidRLP();
-
-        uint8 prefix = uint8(data[offset]);
-
-        if (prefix == 0x94) {
-            // Address is 20 bytes with prefix 0x94
-            result = new bytes(20);
-            for (uint256 i = 0; i < 20;) {
-                result[i] = data[offset + 1 + i];
-                unchecked {
-                    ++i;
-                }
-            }
-            return (result, 21);
-        } else {
-            revert InvalidAddress();
-        }
     }
 
     /**
@@ -195,75 +160,28 @@ library ReceiptValidator {
 
         // Parse and validate data payload (amount)
         offset = receiptRlp.skipItem(topicsOffset); // Skip entire topics array
-        (bytes memory dataBytes,) = parseDataFromRLP(receiptRlp, offset);
-
-        // Convert data bytes to uint256 (amount)
-        if (dataBytes.length > 32) revert InvalidRLP();
-        uint256 logAmount = 0;
-        for (uint256 i = 0; i < dataBytes.length;) {
-            logAmount = (logAmount << 8) | uint8(dataBytes[i]);
-            unchecked {
-                ++i;
+        uint256 logAmount;
+        {
+            uint8 dataPrefix = uint8(receiptRlp[offset]);
+            if (dataPrefix < 0x80) {
+                logAmount = dataPrefix;
+            } else if (dataPrefix == 0x80) {
+                logAmount = 0;
+            } else if (dataPrefix <= 0xa0) {
+                uint256 len = dataPrefix - 0x80;
+                for (uint256 i = 0; i < len;) {
+                    logAmount = (logAmount << 8) | uint8(receiptRlp[offset + 1 + i]);
+                    unchecked {
+                        ++i;
+                    }
+                }
+            } else {
+                revert InvalidRLP();
             }
         }
         if (logAmount != expectedAmount) revert AmountMismatch();
 
         return true;
-    }
-
-    /**
-     * @dev Parse data field from RLP
-     * @param data RLP encoded data
-     * @param offset Current offset
-     * @return result Parsed data bytes
-     * @return length Length consumed
-     */
-    function parseDataFromRLP(bytes calldata data, uint256 offset)
-        private
-        pure
-        returns (bytes memory result, uint256 length)
-    {
-        if (offset >= data.length) revert InvalidRLP();
-
-        uint8 prefix = uint8(data[offset]);
-
-        if (prefix < 0x80) {
-            // Single byte
-            result = new bytes(1);
-            result[0] = bytes1(prefix);
-            return (result, 1);
-        } else if (prefix < 0xb8) {
-            // Short string
-            uint256 dataLength = prefix - 0x80;
-            result = new bytes(dataLength);
-            for (uint256 i = 0; i < dataLength;) {
-                result[i] = data[offset + 1 + i];
-                unchecked {
-                    ++i;
-                }
-            }
-            return (result, 1 + dataLength);
-        } else if (prefix < 0xc0) {
-            // Long string
-            uint256 lengthBytes = prefix - 0xb7;
-            uint256 dataLength = 0;
-            for (uint256 i = 0; i < lengthBytes;) {
-                dataLength = (dataLength << 8) | uint8(data[offset + 1 + i]);
-                unchecked {
-                    ++i;
-                }
-            }
-            result = new bytes(dataLength);
-            for (uint256 i = 0; i < dataLength;) {
-                result[i] = data[offset + 1 + lengthBytes + i];
-                unchecked {
-                    ++i;
-                }
-            }
-            return (result, 1 + lengthBytes + dataLength);
-        } else {
-            revert ExpectedStringData();
-        }
     }
 
     /**
