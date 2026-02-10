@@ -17,8 +17,6 @@ library BlockHeaderParser {
 
     error InvalidRLPList();
     error InvalidRLPEncoding();
-    error RLPOffsetOutOfBounds();
-    error ExpectedStringItem();
 
     /**
      * @dev Get offset to inner header (skips Tempo wrapper if present)
@@ -75,15 +73,18 @@ library BlockHeaderParser {
             }
         }
 
-        // Extract block number
-        (bytes memory numBytes,) = parseItemFromCalldata(blockHeader, offset);
-
-        // Decode big-endian number
-        uint256 blockNumber = 0;
-        for (uint256 i = 0; i < numBytes.length;) {
-            blockNumber = (blockNumber << 8) | uint8(numBytes[i]);
-            unchecked {
-                ++i;
+        // Extract block number directly from calldata
+        uint8 prefix = uint8(blockHeader[offset]);
+        uint256 blockNumber;
+        if (prefix < 0x80) {
+            blockNumber = prefix;
+        } else {
+            uint256 len = prefix - 0x80;
+            for (uint256 i = 0; i < len;) {
+                blockNumber = (blockNumber << 8) | uint8(blockHeader[offset + 1 + i]);
+                unchecked {
+                    ++i;
+                }
             }
         }
 
@@ -117,97 +118,6 @@ library BlockHeaderParser {
         }
 
         return receiptsRoot;
-    }
-
-    /**
-     * @dev Parse RLP item from calldata (helper function)
-     * @param data Calldata containing RLP item
-     * @param offset Current offset in the data
-     * @return result Parsed item content
-     * @return length Total length consumed
-     */
-    function parseItemFromCalldata(bytes calldata data, uint256 offset)
-        private
-        pure
-        returns (bytes memory result, uint256 length)
-    {
-        if (offset >= data.length) revert RLPOffsetOutOfBounds();
-
-        uint8 prefix = uint8(data[offset]);
-
-        if (prefix < 0x80) {
-            // Single byte
-            result = new bytes(1);
-            result[0] = bytes1(prefix);
-            return (result, 1);
-        } else if (prefix < 0xb8) {
-            // Short string
-            uint256 itemLength = prefix - 0x80;
-            result = new bytes(itemLength);
-            for (uint256 i = 0; i < itemLength;) {
-                result[i] = data[offset + 1 + i];
-                unchecked {
-                    ++i;
-                }
-            }
-            return (result, 1 + itemLength);
-        } else if (prefix < 0xc0) {
-            // Long string
-            uint256 lengthBytes = prefix - 0xb7;
-            uint256 itemLength = 0;
-            for (uint256 i = 0; i < lengthBytes;) {
-                itemLength = (itemLength << 8) | uint8(data[offset + 1 + i]);
-                unchecked {
-                    ++i;
-                }
-            }
-            result = new bytes(itemLength);
-            for (uint256 i = 0; i < itemLength;) {
-                result[i] = data[offset + 1 + lengthBytes + i];
-                unchecked {
-                    ++i;
-                }
-            }
-            return (result, 1 + lengthBytes + itemLength);
-        } else {
-            revert ExpectedStringItem();
-        }
-    }
-
-    /**
-     * @dev Extract state root from block header
-     * @param blockHeader RLP-encoded block header
-     * @return State root hash
-     */
-    function extractStateRoot(bytes calldata blockHeader) internal pure returns (bytes32) {
-        uint256 offset = 0;
-
-        // Skip RLP list prefix
-        if (blockHeader[offset] < 0xc0) revert InvalidRLPList();
-        if (blockHeader[offset] >= 0xf8) {
-            offset += 1 + (uint8(blockHeader[offset]) - 0xf7);
-        } else {
-            offset += 1;
-        }
-
-        // Skip first 3 fields to get to stateRoot (index 3)
-        for (uint256 i = 0; i < 3;) {
-            offset = blockHeader.skipItem(offset);
-            unchecked {
-                ++i;
-            }
-        }
-
-        // Extract stateRoot (32 bytes)
-        if (blockHeader[offset] != 0xa0) revert InvalidRLPEncoding();
-        offset += 1;
-
-        bytes32 stateRoot;
-        assembly {
-            stateRoot := calldataload(add(blockHeader.offset, offset))
-        }
-
-        return stateRoot;
     }
 
     /**
