@@ -4,13 +4,17 @@ on:
   pull_request:
     paths:
       - "src/**"
-      - "artifacts/runtime_bytecode.hex"
-      - "artifacts/deployment_bytecode.hex"
+      - "artifacts/native_deployment.hex"
+      - "artifacts/native_runtime.hex"
+      - "artifacts/erc20_deployment.hex"
+      - "artifacts/erc20_runtime.hex"
   push:
     paths:
       - "src/**"
-      - "artifacts/runtime_bytecode.hex"
-      - "artifacts/deployment_bytecode.hex"
+      - "artifacts/native_deployment.hex"
+      - "artifacts/native_runtime.hex"
+      - "artifacts/erc20_deployment.hex"
+      - "artifacts/erc20_runtime.hex"
   workflow_dispatch:
 
 jobs:
@@ -66,16 +70,16 @@ jobs:
 
           if echo "$CHANGED_FILES" | grep -qE '^src/'; then
             echo "Detected changes in src/."
-            if echo "$CHANGED_FILES" | grep -qE '^artifacts/deployment_bytecode\.hex$'; then
-              echo "artifacts/deployment_bytecode.hex changed as expected."
-            else
-              echo "::error title=Bytecode not updated::Changes in src/ require an updated artifacts/deployment_bytecode.hex."
-              exit 1
-            fi
-            if echo "$CHANGED_FILES" | grep -qE '^artifacts/runtime_bytecode\.hex$'; then
-              echo "artifacts/runtime_bytecode.hex changed as expected."
-            else
-              echo "::error title=Bytecode not updated::Changes in src/ require an updated artifacts/runtime_bytecode.hex."
+            MISSING=()
+            for f in native_deployment native_runtime erc20_deployment erc20_runtime; do
+              if echo "$CHANGED_FILES" | grep -qE "^artifacts/${f}\\.hex$"; then
+                echo "artifacts/${f}.hex changed as expected."
+              else
+                MISSING+=("artifacts/${f}.hex")
+              fi
+            done
+            if [[ ${#MISSING[@]} -gt 0 ]]; then
+              echo "::error title=Bytecode not updated::Changes in src/ require updated artifacts: ${MISSING[*]}"
               exit 1
             fi
           else

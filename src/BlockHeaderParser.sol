@@ -15,6 +15,9 @@ import "./RLPParser.sol";
 library BlockHeaderParser {
     using RLPParser for bytes;
 
+    error InvalidRLPList();
+    error InvalidRLPEncoding();
+
     /**
      * @dev Get offset to inner header (skips Tempo wrapper if present)
      * Tempo: [slot, parent_slot, extra, inner_header] -> skip to inner_header
@@ -24,7 +27,7 @@ library BlockHeaderParser {
         uint256 offset = 0;
 
         // Skip outer RLP list prefix
-        require(blockHeader[offset] >= 0xc0, "Invalid RLP list");
+        if (blockHeader[offset] < 0xc0) revert InvalidRLPList();
         if (blockHeader[offset] >= 0xf8) {
             offset += 1 + (uint8(blockHeader[offset]) - 0xf7);
         } else {
@@ -34,12 +37,15 @@ library BlockHeaderParser {
         // Tempo networks: 42429 (local/test), 42431 (Moderato testnet)
         if (block.chainid == 42429 || block.chainid == 42431) {
             // Tempo: skip first 3 fields (slot, parent_slot, extra) to get to inner header
-            for (uint256 i = 0; i < 3; i++) {
+            for (uint256 i = 0; i < 3;) {
                 offset = blockHeader.skipItem(offset);
+                unchecked {
+                    ++i;
+                }
             }
 
             // Now skip the inner header's list prefix
-            require(blockHeader[offset] >= 0xc0, "Invalid inner header RLP list");
+            if (blockHeader[offset] < 0xc0) revert InvalidRLPList();
             if (blockHeader[offset] >= 0xf8) {
                 offset += 1 + (uint8(blockHeader[offset]) - 0xf7);
             } else {
@@ -60,17 +66,26 @@ library BlockHeaderParser {
 
         // Skip first 8 fields to get to block number (index 8)
         // [parentHash, sha3Uncles, miner, stateRoot, transactionsRoot, receiptsRoot, logsBloom, difficulty, number, ...]
-        for (uint256 i = 0; i < 8; i++) {
+        for (uint256 i = 0; i < 8;) {
             offset = blockHeader.skipItem(offset);
+            unchecked {
+                ++i;
+            }
         }
 
-        // Extract block number
-        (bytes memory numBytes,) = parseItemFromCalldata(blockHeader, offset);
-
-        // Decode big-endian number
-        uint256 blockNumber = 0;
-        for (uint256 i = 0; i < numBytes.length; i++) {
-            blockNumber = (blockNumber << 8) | uint8(numBytes[i]);
+        // Extract block number directly from calldata
+        uint8 prefix = uint8(blockHeader[offset]);
+        uint256 blockNumber;
+        if (prefix < 0x80) {
+            blockNumber = prefix;
+        } else {
+            uint256 len = prefix - 0x80;
+            for (uint256 i = 0; i < len;) {
+                blockNumber = (blockNumber << 8) | uint8(blockHeader[offset + 1 + i]);
+                unchecked {
+                    ++i;
+                }
+            }
         }
 
         return blockNumber;
@@ -86,12 +101,15 @@ library BlockHeaderParser {
 
         // Skip first 5 fields to get to receiptsRoot (index 5)
         // [parentHash, sha3Uncles, miner, stateRoot, transactionsRoot, receiptsRoot, ...]
-        for (uint256 i = 0; i < 5; i++) {
+        for (uint256 i = 0; i < 5;) {
             offset = blockHeader.skipItem(offset);
+            unchecked {
+                ++i;
+            }
         }
 
         // Extract receiptsRoot (32 bytes)
-        require(blockHeader[offset] == 0xa0, "Invalid receiptsRoot RLP encoding");
+        if (blockHeader[offset] != 0xa0) revert InvalidRLPEncoding();
         offset += 1;
 
         bytes32 receiptsRoot;
@@ -103,85 +121,6 @@ library BlockHeaderParser {
     }
 
     /**
-     * @dev Parse RLP item from calldata (helper function)
-     * @param data Calldata containing RLP item
-     * @param offset Current offset in the data
-     * @return result Parsed item content
-     * @return length Total length consumed
-     */
-    function parseItemFromCalldata(bytes calldata data, uint256 offset)
-        private
-        pure
-        returns (bytes memory result, uint256 length)
-    {
-        require(offset < data.length, "RLP offset out of bounds");
-
-        uint8 prefix = uint8(data[offset]);
-
-        if (prefix < 0x80) {
-            // Single byte
-            result = new bytes(1);
-            result[0] = bytes1(prefix);
-            return (result, 1);
-        } else if (prefix < 0xb8) {
-            // Short string
-            uint256 itemLength = prefix - 0x80;
-            result = new bytes(itemLength);
-            for (uint256 i = 0; i < itemLength; i++) {
-                result[i] = data[offset + 1 + i];
-            }
-            return (result, 1 + itemLength);
-        } else if (prefix < 0xc0) {
-            // Long string
-            uint256 lengthBytes = prefix - 0xb7;
-            uint256 itemLength = 0;
-            for (uint256 i = 0; i < lengthBytes; i++) {
-                itemLength = (itemLength << 8) | uint8(data[offset + 1 + i]);
-            }
-            result = new bytes(itemLength);
-            for (uint256 i = 0; i < itemLength; i++) {
-                result[i] = data[offset + 1 + lengthBytes + i];
-            }
-            return (result, 1 + lengthBytes + itemLength);
-        } else {
-            revert("Expected string item, got list");
-        }
-    }
-
-    /**
-     * @dev Extract state root from block header
-     * @param blockHeader RLP-encoded block header
-     * @return State root hash
-     */
-    function extractStateRoot(bytes calldata blockHeader) internal pure returns (bytes32) {
-        uint256 offset = 0;
-
-        // Skip RLP list prefix
-        require(blockHeader[offset] >= 0xc0, "Invalid RLP list");
-        if (blockHeader[offset] >= 0xf8) {
-            offset += 1 + (uint8(blockHeader[offset]) - 0xf7);
-        } else {
-            offset += 1;
-        }
-
-        // Skip first 3 fields to get to stateRoot (index 3)
-        for (uint256 i = 0; i < 3; i++) {
-            offset = blockHeader.skipItem(offset);
-        }
-
-        // Extract stateRoot (32 bytes)
-        require(blockHeader[offset] == 0xa0, "Invalid stateRoot RLP encoding");
-        offset += 1;
-
-        bytes32 stateRoot;
-        assembly {
-            stateRoot := calldataload(add(blockHeader.offset, offset))
-        }
-
-        return stateRoot;
-    }
-
-    /**
      * @dev Extract transactions root from block header
      * @param blockHeader RLP-encoded block header
      * @return Transactions root hash
@@ -190,7 +129,7 @@ library BlockHeaderParser {
         uint256 offset = 0;
 
         // Skip RLP list prefix
-        require(blockHeader[offset] >= 0xc0, "Invalid RLP list");
+        if (blockHeader[offset] < 0xc0) revert InvalidRLPList();
         if (blockHeader[offset] >= 0xf8) {
             offset += 1 + (uint8(blockHeader[offset]) - 0xf7);
         } else {
@@ -198,12 +137,15 @@ library BlockHeaderParser {
         }
 
         // Skip first 4 fields to get to transactionsRoot (index 4)
-        for (uint256 i = 0; i < 4; i++) {
+        for (uint256 i = 0; i < 4;) {
             offset = blockHeader.skipItem(offset);
+            unchecked {
+                ++i;
+            }
         }
 
         // Extract transactionsRoot (32 bytes)
-        require(blockHeader[offset] == 0xa0, "Invalid transactionsRoot RLP encoding");
+        if (blockHeader[offset] != 0xa0) revert InvalidRLPEncoding();
         offset += 1;
 
         bytes32 transactionsRoot;

@@ -7,6 +7,9 @@ pragma solidity ^0.8.13;
  * Used for decoding Ethereum block headers, transaction receipts, and event logs
  */
 library RLPParser {
+    error RLPOffsetOutOfBounds();
+    error ExpectedBytes32();
+
     /**
      * @dev Skip an RLP item and return new offset
      * @param data The RLP encoded data
@@ -14,7 +17,7 @@ library RLPParser {
      * @return New offset after skipping the item
      */
     function skipItem(bytes calldata data, uint256 offset) internal pure returns (uint256) {
-        require(offset < data.length, "RLP offset out of bounds");
+        if (offset >= data.length) revert RLPOffsetOutOfBounds();
 
         uint8 prefix = uint8(data[offset]);
 
@@ -28,8 +31,11 @@ library RLPParser {
             // Long string
             uint256 lengthBytes = prefix - 0xb7;
             uint256 length = 0;
-            for (uint256 i = 0; i < lengthBytes; i++) {
+            for (uint256 i = 0; i < lengthBytes;) {
                 length = (length << 8) | uint8(data[offset + 1 + i]);
+                unchecked {
+                    ++i;
+                }
             }
             return offset + 1 + lengthBytes + length;
         } else if (prefix < 0xf8) {
@@ -39,8 +45,11 @@ library RLPParser {
             // Long list
             uint256 lengthBytes = prefix - 0xf7;
             uint256 length = 0;
-            for (uint256 i = 0; i < lengthBytes; i++) {
+            for (uint256 i = 0; i < lengthBytes;) {
                 length = (length << 8) | uint8(data[offset + 1 + i]);
+                unchecked {
+                    ++i;
+                }
             }
             return offset + 1 + lengthBytes + length;
         }
@@ -54,7 +63,7 @@ library RLPParser {
      * @return length Total length of the RLP item including prefix
      */
     function parseItem(bytes memory data, uint256 offset) internal pure returns (bytes memory, uint256) {
-        require(offset < data.length, "RLP offset out of bounds");
+        if (offset >= data.length) revert RLPOffsetOutOfBounds();
 
         uint8 prefix = uint8(data[offset]);
 
@@ -67,28 +76,40 @@ library RLPParser {
             // Short string
             uint256 length = prefix - 0x80;
             bytes memory result = new bytes(length);
-            for (uint256 i = 0; i < length; i++) {
+            for (uint256 i = 0; i < length;) {
                 result[i] = data[offset + 1 + i];
+                unchecked {
+                    ++i;
+                }
             }
             return (result, 1 + length);
         } else if (prefix < 0xc0) {
             // Long string
             uint256 lengthBytes = prefix - 0xb7;
             uint256 length = 0;
-            for (uint256 i = 0; i < lengthBytes; i++) {
+            for (uint256 i = 0; i < lengthBytes;) {
                 length = (length << 8) | uint8(data[offset + 1 + i]);
+                unchecked {
+                    ++i;
+                }
             }
             bytes memory result = new bytes(length);
-            for (uint256 i = 0; i < length; i++) {
+            for (uint256 i = 0; i < length;) {
                 result[i] = data[offset + 1 + lengthBytes + i];
+                unchecked {
+                    ++i;
+                }
             }
             return (result, 1 + lengthBytes + length);
         } else {
             // List - return the entire list content
             uint256 totalLength = getItemLength(data, offset);
             bytes memory result = new bytes(totalLength);
-            for (uint256 i = 0; i < totalLength; i++) {
+            for (uint256 i = 0; i < totalLength;) {
                 result[i] = data[offset + i];
+                unchecked {
+                    ++i;
+                }
             }
             return (result, totalLength);
         }
@@ -101,7 +122,7 @@ library RLPParser {
      * @return Total length of the RLP item
      */
     function getItemLength(bytes memory data, uint256 offset) internal pure returns (uint256) {
-        require(offset < data.length, "RLP offset out of bounds");
+        if (offset >= data.length) revert RLPOffsetOutOfBounds();
 
         uint8 prefix = uint8(data[offset]);
 
@@ -112,8 +133,11 @@ library RLPParser {
         } else if (prefix < 0xc0) {
             uint256 lengthBytes = prefix - 0xb7;
             uint256 length = 0;
-            for (uint256 i = 0; i < lengthBytes; i++) {
+            for (uint256 i = 0; i < lengthBytes;) {
                 length = (length << 8) | uint8(data[offset + 1 + i]);
+                unchecked {
+                    ++i;
+                }
             }
             return 1 + lengthBytes + length;
         } else if (prefix < 0xf8) {
@@ -121,8 +145,11 @@ library RLPParser {
         } else {
             uint256 lengthBytes = prefix - 0xf7;
             uint256 length = 0;
-            for (uint256 i = 0; i < lengthBytes; i++) {
+            for (uint256 i = 0; i < lengthBytes;) {
                 length = (length << 8) | uint8(data[offset + 1 + i]);
+                unchecked {
+                    ++i;
+                }
             }
             return 1 + lengthBytes + length;
         }
@@ -135,7 +162,7 @@ library RLPParser {
      * @return The extracted bytes32 value
      */
     function extractBytes32(bytes calldata data, uint256 offset) internal pure returns (bytes32) {
-        require(data[offset] == 0xa0, "Expected 32-byte string");
+        if (data[offset] != 0xa0) revert ExpectedBytes32();
         bytes32 result;
         assembly {
             result := calldataload(add(data.offset, add(offset, 1)))
