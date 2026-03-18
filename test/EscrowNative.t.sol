@@ -256,52 +256,6 @@ contract EscrowNativeTest is Test {
         escrow.collect(dummyProof, block.number - 1);
     }
 
-    function testWithdrawNative() public {
-        uint256 initialBalance = deployer.balance;
-
-        vm.prank(deployer);
-        escrow.withdraw();
-
-        assertEq(deployer.balance, initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
-        assertFalse(escrow.funded());
-        assertEq(escrow.currentPaymentAmount(), 0);
-        assertEq(escrow.currentRewardAmount(), 0);
-    }
-
-    function testWithdrawNativeNotFunded() public {
-        vm.prank(deployer);
-        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
-
-        vm.prank(deployer);
-        vm.expectRevert(EscrowBase.NotFunded.selector);
-        unfundedEscrow.withdraw();
-    }
-
-    function testWithdrawNativeOnlyDeployer() public {
-        vm.prank(executor);
-        vm.expectRevert(EscrowBase.OnlyDeployer.selector);
-        escrow.withdraw();
-    }
-
-    function testWithdrawNativeWhileBonded() public {
-        _bondExecutor();
-
-        vm.prank(deployer);
-        vm.expectRevert(EscrowBase.BondActive.selector);
-        escrow.withdraw();
-    }
-
-    function testWithdrawNativeAfterBondExpired() public {
-        _bondExecutor();
-
-        vm.warp(block.timestamp + 6 minutes);
-
-        vm.prank(deployer);
-        escrow.withdraw();
-
-        assertFalse(escrow.funded());
-    }
-
     function testIsBondedNative() public {
         assertFalse(escrow.is_bonded());
 
@@ -349,44 +303,6 @@ contract EscrowNativeTest is Test {
         assertEq(escrow.bondedExecutor(), other);
         assertEq(escrow.currentRewardAmount(), updatedReward);
         assertEq(escrow.bondAmount(), newBondAmount);
-    }
-
-    function testWithdrawNativeAfterCollectingBonds() public {
-        uint256 startTime = block.timestamp;
-
-        // First executor bonds at time 0
-        vm.prank(executor);
-        escrow.bond{value: BOND_AMOUNT}();
-
-        // Warp to startTime + 6 minutes (first deadline expires)
-        vm.warp(startTime + 6 minutes);
-        assertFalse(escrow.is_bonded());
-
-        // After first bond fails, reward = 0.5 + 0.25 = 0.75, so minimum bond = 0.375
-        uint256 updatedReward = REWARD_AMOUNT + BOND_AMOUNT;
-        uint256 newBondAmount = updatedReward / 2;
-
-        // Second executor bonds at startTime + 6 minutes
-        vm.prank(other);
-        escrow.bond{value: newBondAmount}();
-
-        // Verify first bond was collected
-        assertEq(escrow.currentRewardAmount(), updatedReward);
-        assertEq(escrow.bondAmount(), newBondAmount);
-        assertEq(escrow.bondedExecutor(), other);
-
-        // Warp to startTime + 12 minutes (second deadline expires)
-        vm.warp(startTime + 12 minutes);
-        assertFalse(escrow.is_bonded());
-
-        uint256 initialBalance = deployer.balance;
-
-        vm.prank(deployer);
-        escrow.withdraw();
-
-        assertEq(deployer.balance, initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
-        // Escrow holds both failed bonds: first bond (0.25) + second bond (0.375)
-        assertEq(address(escrow).balance, BOND_AMOUNT + newBondAmount);
     }
 
     function testRequestCancellationNative() public {
