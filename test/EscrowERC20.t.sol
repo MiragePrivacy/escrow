@@ -443,6 +443,105 @@ contract EscrowERC20Test is Test {
         assertEq(token.balanceOf(address(escrow)), BOND_AMOUNT + newBondAmount);
     }
 
+    // --- cancelAndWithdraw tests ---
+
+    function testCancelAndWithdraw() public {
+        uint256 initialBalance = token.balanceOf(deployer);
+
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        assertTrue(escrow.cancellationRequest());
+        assertFalse(escrow.funded());
+        assertEq(escrow.currentPaymentAmount(), 0);
+        assertEq(escrow.currentRewardAmount(), 0);
+        assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+    }
+
+    function testCancelAndWithdrawOnlyDeployer() public {
+        vm.prank(executor);
+        vm.expectRevert(EscrowBase.OnlyDeployer.selector);
+        escrow.cancelAndWithdraw();
+    }
+
+    function testCancelAndWithdrawNotFunded() public {
+        vm.prank(deployer);
+        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+
+        vm.prank(deployer);
+        vm.expectRevert(EscrowBase.NotFunded.selector);
+        unfundedEscrow.cancelAndWithdraw();
+    }
+
+    function testCancelAndWithdrawWhileBonded() public {
+        _bondExecutor();
+
+        vm.prank(deployer);
+        vm.expectRevert(EscrowBase.BondActive.selector);
+        escrow.cancelAndWithdraw();
+    }
+
+    function testCancelAndWithdrawAfterBondExpired() public {
+        _bondExecutor();
+
+        vm.warp(block.timestamp + 6 minutes);
+
+        uint256 initialBalance = token.balanceOf(deployer);
+
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        assertTrue(escrow.cancellationRequest());
+        assertFalse(escrow.funded());
+        assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+    }
+
+    function testCancelAndWithdrawPreventsRaceCondition() public {
+        // Deployer atomically cancels and withdraws
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        // Escrow is now unfunded — executor cannot bond
+        vm.startPrank(executor);
+        token.approve(address(escrow), BOND_AMOUNT);
+        vm.expectRevert(EscrowBase.NotFunded.selector);
+        escrow.bond(BOND_AMOUNT);
+        vm.stopPrank();
+    }
+
+    function testCancelAndWithdrawAlreadyCancelled() public {
+        vm.prank(deployer);
+        escrow.requestCancellation();
+
+        uint256 initialBalance = token.balanceOf(deployer);
+
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        assertTrue(escrow.cancellationRequest());
+        assertFalse(escrow.funded());
+        assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+    }
+
+    function testCancelAndWithdrawAfterCollectingBonds() public {
+        uint256 startTime = block.timestamp;
+
+        vm.startPrank(executor);
+        token.approve(address(escrow), BOND_AMOUNT);
+        escrow.bond(BOND_AMOUNT);
+        vm.stopPrank();
+
+        vm.warp(startTime + 6 minutes);
+
+        uint256 initialBalance = token.balanceOf(deployer);
+
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+        assertEq(token.balanceOf(address(escrow)), BOND_AMOUNT);
+    }
+
     function _bondExecutor() internal {
         vm.startPrank(executor);
         token.approve(address(escrow), BOND_AMOUNT);

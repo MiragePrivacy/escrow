@@ -406,6 +406,99 @@ contract EscrowNativeTest is Test {
         vm.stopPrank();
     }
 
+    // --- cancelAndWithdraw tests ---
+
+    function testCancelAndWithdrawNative() public {
+        uint256 initialBalance = deployer.balance;
+
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        assertTrue(escrow.cancellationRequest());
+        assertFalse(escrow.funded());
+        assertEq(escrow.currentPaymentAmount(), 0);
+        assertEq(escrow.currentRewardAmount(), 0);
+        assertEq(deployer.balance, initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+    }
+
+    function testCancelAndWithdrawNativeOnlyDeployer() public {
+        vm.prank(executor);
+        vm.expectRevert(EscrowBase.OnlyDeployer.selector);
+        escrow.cancelAndWithdraw();
+    }
+
+    function testCancelAndWithdrawNativeNotFunded() public {
+        vm.prank(deployer);
+        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
+
+        vm.prank(deployer);
+        vm.expectRevert(EscrowBase.NotFunded.selector);
+        unfundedEscrow.cancelAndWithdraw();
+    }
+
+    function testCancelAndWithdrawNativeWhileBonded() public {
+        _bondExecutor();
+
+        vm.prank(deployer);
+        vm.expectRevert(EscrowBase.BondActive.selector);
+        escrow.cancelAndWithdraw();
+    }
+
+    function testCancelAndWithdrawNativeAfterBondExpired() public {
+        _bondExecutor();
+
+        vm.warp(block.timestamp + 6 minutes);
+
+        uint256 initialBalance = deployer.balance;
+
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        assertTrue(escrow.cancellationRequest());
+        assertFalse(escrow.funded());
+        assertEq(deployer.balance, initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+    }
+
+    function testCancelAndWithdrawNativePreventsRaceCondition() public {
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        vm.prank(executor);
+        vm.expectRevert(EscrowBase.NotFunded.selector);
+        escrow.bond{value: BOND_AMOUNT}();
+    }
+
+    function testCancelAndWithdrawNativeAlreadyCancelled() public {
+        vm.prank(deployer);
+        escrow.requestCancellation();
+
+        uint256 initialBalance = deployer.balance;
+
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        assertTrue(escrow.cancellationRequest());
+        assertFalse(escrow.funded());
+        assertEq(deployer.balance, initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+    }
+
+    function testCancelAndWithdrawNativeAfterCollectingBonds() public {
+        uint256 startTime = block.timestamp;
+
+        vm.prank(executor);
+        escrow.bond{value: BOND_AMOUNT}();
+
+        vm.warp(startTime + 6 minutes);
+
+        uint256 initialBalance = deployer.balance;
+
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        assertEq(deployer.balance, initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+        assertEq(address(escrow).balance, BOND_AMOUNT);
+    }
+
     function _bondExecutor() internal {
         vm.prank(executor);
         escrow.bond{value: BOND_AMOUNT}();
