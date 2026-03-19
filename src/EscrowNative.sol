@@ -101,9 +101,10 @@ contract EscrowNative is EscrowBase {
         if (!success) revert ETHTransferFailed();
     }
 
-    // allows deployer to withdraw all assets except the seized bonds (so the deployer can withdraw only and only what was deposited by deployer in the start function)
-    // only if the contract is not currently bonded (or the execution deadline has passed)
-    function withdraw() external {
+    /// @notice Cancel and withdraw funds in a single transaction.
+    /// Reverts if a node has already bonded.
+    function cancelAndWithdraw() external {
+        cancellationRequest = true;
         _validateWithdraw();
         _tryResetBondData();
 

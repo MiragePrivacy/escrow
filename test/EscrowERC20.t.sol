@@ -296,52 +296,6 @@ contract EscrowERC20Test is Test {
         escrow.collect(dummyProof, block.number - 1);
     }
 
-    function testWithdraw() public {
-        uint256 initialBalance = token.balanceOf(deployer);
-
-        vm.prank(deployer);
-        escrow.withdraw();
-
-        assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
-        assertFalse(escrow.funded());
-        assertEq(escrow.currentPaymentAmount(), 0);
-        assertEq(escrow.currentRewardAmount(), 0);
-    }
-
-    function testWithdrawNotFunded() public {
-        vm.prank(deployer);
-        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
-
-        vm.prank(deployer);
-        vm.expectRevert(EscrowBase.NotFunded.selector);
-        unfundedEscrow.withdraw();
-    }
-
-    function testWithdrawOnlyDeployer() public {
-        vm.prank(executor);
-        vm.expectRevert(EscrowBase.OnlyDeployer.selector);
-        escrow.withdraw();
-    }
-
-    function testWithdrawWhileBonded() public {
-        _bondExecutor();
-
-        vm.prank(deployer);
-        vm.expectRevert(EscrowBase.BondActive.selector);
-        escrow.withdraw();
-    }
-
-    function testWithdrawAfterBondExpired() public {
-        _bondExecutor();
-
-        vm.warp(block.timestamp + 6 minutes);
-
-        vm.prank(deployer);
-        escrow.withdraw();
-
-        assertFalse(escrow.funded());
-    }
-
     function testIsBonded() public {
         assertFalse(escrow.is_bonded());
 
@@ -399,48 +353,101 @@ contract EscrowERC20Test is Test {
         assertEq(escrow.bondAmount(), newBondAmount);
     }
 
-    function testWithdrawAfterCollectingBonds() public {
-        uint256 startTime = block.timestamp;
+    function testCancelAndWithdraw() public {
+        uint256 initialBalance = token.balanceOf(deployer);
 
-        // First executor bonds at time 0
-        vm.startPrank(executor);
-        token.approve(address(escrow), BOND_AMOUNT);
-        escrow.bond(BOND_AMOUNT);
-        vm.stopPrank();
-        // First deadline = startTime + 5 minutes
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
 
-        // Warp to startTime + 6 minutes (first deadline expires)
-        vm.warp(startTime + 6 minutes);
-        assertFalse(escrow.is_bonded());
+        assertTrue(escrow.cancellationRequest());
+        assertFalse(escrow.funded());
+        assertEq(escrow.currentPaymentAmount(), 0);
+        assertEq(escrow.currentRewardAmount(), 0);
+        assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+    }
 
-        // After first bond fails, reward = 500 + 250 = 750, so minimum bond = 375
-        uint256 updatedReward = REWARD_AMOUNT + BOND_AMOUNT;
-        uint256 newBondAmount = updatedReward / 2;
+    function testCancelAndWithdrawOnlyDeployer() public {
+        vm.prank(executor);
+        vm.expectRevert(EscrowBase.OnlyDeployer.selector);
+        escrow.cancelAndWithdraw();
+    }
 
-        // Second executor bonds at startTime + 6 minutes
-        vm.startPrank(other);
-        token.approve(address(escrow), newBondAmount);
-        escrow.bond(newBondAmount);
-        vm.stopPrank();
-        // Second deadline = (startTime + 6 minutes) + 5 minutes = startTime + 11 minutes
+    function testCancelAndWithdrawNotFunded() public {
+        vm.prank(deployer);
+        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
 
-        // Verify first bond was collected
-        assertEq(escrow.currentRewardAmount(), updatedReward);
-        assertEq(escrow.bondAmount(), newBondAmount);
-        assertEq(escrow.bondedExecutor(), other);
+        vm.prank(deployer);
+        vm.expectRevert(EscrowBase.NotFunded.selector);
+        unfundedEscrow.cancelAndWithdraw();
+    }
 
-        // Warp to startTime + 12 minutes (second deadline expires)
-        vm.warp(startTime + 12 minutes);
-        assertFalse(escrow.is_bonded());
+    function testCancelAndWithdrawWhileBonded() public {
+        _bondExecutor();
+
+        vm.prank(deployer);
+        vm.expectRevert(EscrowBase.BondActive.selector);
+        escrow.cancelAndWithdraw();
+    }
+
+    function testCancelAndWithdrawAfterBondExpired() public {
+        _bondExecutor();
+
+        vm.warp(block.timestamp + 6 minutes);
 
         uint256 initialBalance = token.balanceOf(deployer);
 
         vm.prank(deployer);
-        escrow.withdraw();
+        escrow.cancelAndWithdraw();
+
+        assertTrue(escrow.cancellationRequest());
+        assertFalse(escrow.funded());
+        assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+    }
+
+    function testCancelAndWithdrawPreventsRaceCondition() public {
+        // Deployer atomically cancels and withdraws
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        // Escrow is now unfunded — executor cannot bond
+        vm.startPrank(executor);
+        token.approve(address(escrow), BOND_AMOUNT);
+        vm.expectRevert(EscrowBase.NotFunded.selector);
+        escrow.bond(BOND_AMOUNT);
+        vm.stopPrank();
+    }
+
+    function testCancelAndWithdrawAlreadyCancelled() public {
+        vm.prank(deployer);
+        escrow.requestCancellation();
+
+        uint256 initialBalance = token.balanceOf(deployer);
+
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        assertTrue(escrow.cancellationRequest());
+        assertFalse(escrow.funded());
+        assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+    }
+
+    function testCancelAndWithdrawAfterCollectingBonds() public {
+        uint256 startTime = block.timestamp;
+
+        vm.startPrank(executor);
+        token.approve(address(escrow), BOND_AMOUNT);
+        escrow.bond(BOND_AMOUNT);
+        vm.stopPrank();
+
+        vm.warp(startTime + 6 minutes);
+
+        uint256 initialBalance = token.balanceOf(deployer);
+
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
 
         assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
-        // Escrow holds both failed bonds: first bond (250) + second bond (375)
-        assertEq(token.balanceOf(address(escrow)), BOND_AMOUNT + newBondAmount);
+        assertEq(token.balanceOf(address(escrow)), BOND_AMOUNT);
     }
 
     function _bondExecutor() internal {
