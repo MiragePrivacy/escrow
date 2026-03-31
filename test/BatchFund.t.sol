@@ -29,6 +29,11 @@ import {EscrowBase} from "../src/EscrowBase.sol";
 //    - Obfuscated fund() selector 0x49364cd4 is present in deployed dispatcher
 //    - Original selector 0xa65e2cfd is absent (obfuscation replaced all selectors)
 //
+//  Cross-TX verification (successful vs failed):
+//    WORKING TX 0x8bff4e21...: CREATE → 0x7720..., approve → 0x7720..., fund → 0x7720...  (all same)
+//    FAILING TX 0xedf03465...: CREATE → 0x7e97..., approve → 0xD69B..., fund → 0xD69B...  (mismatch)
+//    When the batch targets the correct address, it works. When wrong, silent no-op.
+//
 //  Hypotheses tested:
 //    H1 – Bytecode dispatch dead end                   → RULED OUT
 //    H2 – msg.sender context in batch                  → PLAUSIBLE (general risk)
@@ -130,8 +135,7 @@ contract EscrowFactory {
         // Constructor auto-funds when both amounts > 0.
         // transferFrom inside fund() pulls from msg.sender of fund(), which is
         // address(this) during constructor execution.
-        EscrowERC20 escrow =
-            new EscrowERC20(tokenContract, recipient, expectedAmount, rewardAmount, paymentAmount);
+        EscrowERC20 escrow = new EscrowERC20(tokenContract, recipient, expectedAmount, rewardAmount, paymentAmount);
         return address(escrow);
     }
 
@@ -200,6 +204,15 @@ contract BatchFundTest is Test {
     uint256 constant REWARD = 500e18;
     uint256 constant PAYMENT = 500e18;
     uint256 constant EXPECTED_AMOUNT = 1000e18;
+
+    // Real values from the failing Tempo TX:
+    // 0xedf034653df8ebd016a471bb4c19a1a71b01b39694720ffdde148790b4ac94ae
+    uint256 constant TEMPO_AMOUNT = 100000000;
+    uint256 constant TEMPO_REWARD = 723471;
+    address constant TEMPO_TOKEN = 0x20C0000000000000000000000000000000000000;
+    address constant TEMPO_ESCROW = 0x7e9798a62b42D97fb05b9e092a9A2117FA3fB995;
+    address constant TEMPO_WRONG_TARGET = 0xD69B8fC5D21819A713fDE3e051C97e1Cb09BD2Aa;
+    address constant TEMPO_SENDER = 0xA79045285379f02ad505D7338523843D3A73BBaD;
 
     function setUp() public {
         deployer = makeAddr("deployer");
@@ -328,8 +341,7 @@ contract BatchFundTest is Test {
         vm.prank(address(factory));
         token.approve(futureEscrow, REWARD + PAYMENT);
 
-        address escrowAddr =
-            factory.deployUnfundedThenFund(address(token), recipient, EXPECTED_AMOUNT, REWARD, PAYMENT);
+        address escrowAddr = factory.deployUnfundedThenFund(address(token), recipient, EXPECTED_AMOUNT, REWARD, PAYMENT);
 
         EscrowERC20 escrow = EscrowERC20(escrowAddr);
         assertTrue(escrow.funded(), "should be funded after factory deploy-then-fund");
@@ -342,8 +354,7 @@ contract BatchFundTest is Test {
         EscrowFactory factory = new EscrowFactory();
 
         // Deploy unfunded (0,0) via factory
-        address escrowAddr =
-            factory.deployAndAutoFund(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+        address escrowAddr = factory.deployAndAutoFund(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
 
         EscrowERC20 escrow = EscrowERC20(escrowAddr);
         assertFalse(escrow.funded(), "should start unfunded");
@@ -371,9 +382,7 @@ contract BatchFundTest is Test {
 
         LenientBatcher.Call[] memory calls = new LenientBatcher.Call[](1);
         calls[0] = LenientBatcher.Call({
-            target: address(escrow),
-            data: abi.encodeWithSelector(EscrowERC20.fund.selector, REWARD, PAYMENT),
-            value: 0
+            target: address(escrow), data: abi.encodeWithSelector(EscrowERC20.fund.selector, REWARD, PAYMENT), value: 0
         });
 
         // Batcher swallows the revert — does not propagate
@@ -398,9 +407,7 @@ contract BatchFundTest is Test {
 
         LenientBatcher.Call[] memory calls = new LenientBatcher.Call[](1);
         calls[0] = LenientBatcher.Call({
-            target: address(escrow),
-            data: abi.encodeWithSelector(EscrowERC20.fund.selector, REWARD, PAYMENT),
-            value: 0
+            target: address(escrow), data: abi.encodeWithSelector(EscrowERC20.fund.selector, REWARD, PAYMENT), value: 0
         });
 
         // Batcher is msg.sender, not deployer → OnlyDeployer revert → swallowed
@@ -427,9 +434,7 @@ contract BatchFundTest is Test {
         // Call 1: fund() — this would succeed if msg.sender matches
         // But msg.sender here is the batcher, not deployer → reverts with OnlyDeployer
         calls[0] = StrictBatcher.Call({
-            target: address(escrow),
-            data: abi.encodeWithSelector(EscrowERC20.fund.selector, REWARD, PAYMENT),
-            value: 0
+            target: address(escrow), data: abi.encodeWithSelector(EscrowERC20.fund.selector, REWARD, PAYMENT), value: 0
         });
         // Call 2: some other call that reverts
         calls[1] = StrictBatcher.Call({target: address(0), data: hex"", value: 0});
@@ -454,9 +459,7 @@ contract BatchFundTest is Test {
 
         StrictBatcher.Call[] memory calls = new StrictBatcher.Call[](1);
         calls[0] = StrictBatcher.Call({
-            target: address(escrow),
-            data: abi.encodeWithSelector(EscrowERC20.fund.selector, REWARD, PAYMENT),
-            value: 0
+            target: address(escrow), data: abi.encodeWithSelector(EscrowERC20.fund.selector, REWARD, PAYMENT), value: 0
         });
 
         // deployer calls batcher, batcher calls escrow.fund()
@@ -672,9 +675,7 @@ contract BatchFundTest is Test {
 
         StrictBatcher.Call[] memory calls = new StrictBatcher.Call[](1);
         calls[0] = StrictBatcher.Call({
-            target: address(escrow),
-            data: abi.encodeWithSelector(EscrowERC20.fund.selector, REWARD, PAYMENT),
-            value: 0
+            target: address(escrow), data: abi.encodeWithSelector(EscrowERC20.fund.selector, REWARD, PAYMENT), value: 0
         });
 
         // Even though deployer is tx.origin, msg.sender in fund() is batcher
@@ -700,9 +701,7 @@ contract BatchFundTest is Test {
 
         LenientBatcher.Call[] memory calls = new LenientBatcher.Call[](1);
         calls[0] = LenientBatcher.Call({
-            target: address(escrow),
-            data: abi.encodeWithSelector(EscrowERC20.fund.selector, REWARD, PAYMENT),
-            value: 0
+            target: address(escrow), data: abi.encodeWithSelector(EscrowERC20.fund.selector, REWARD, PAYMENT), value: 0
         });
 
         // Deployer sends batch → batcher calls fund() → OnlyDeployer revert → SWALLOWED
@@ -721,23 +720,21 @@ contract BatchFundTest is Test {
     /// Simulate the exact Tempo token address (0x20c0...0000) as a precompile
     /// that has no code → external call returns empty data → ABI decode failure.
     function testTempoTokenAddressNoCode() public {
-        address tempoToken = address(0x20C0000000000000000000000000000000000000);
-        // Don't etch any code → address has no code
+        // Don't etch any code → TEMPO_TOKEN has no code in test env
 
         vm.startPrank(deployer);
         vm.expectRevert(); // call to address with no code → empty returndata → ABI decode fail
-        new EscrowERC20(tempoToken, recipient, EXPECTED_AMOUNT, REWARD, PAYMENT);
+        new EscrowERC20(TEMPO_TOKEN, recipient, TEMPO_AMOUNT, TEMPO_REWARD, TEMPO_AMOUNT);
         vm.stopPrank();
     }
 
     /// Simulate Tempo token with NoOp behavior etched at the real address.
     function testTempoTokenAsNoOp() public {
-        address tempoToken = address(0x20C0000000000000000000000000000000000000);
         NoOpToken noOp = new NoOpToken();
-        vm.etch(tempoToken, address(noOp).code);
+        vm.etch(TEMPO_TOKEN, address(noOp).code);
 
         vm.startPrank(deployer);
-        EscrowERC20 escrow = new EscrowERC20(tempoToken, recipient, EXPECTED_AMOUNT, REWARD, PAYMENT);
+        EscrowERC20 escrow = new EscrowERC20(TEMPO_TOKEN, recipient, TEMPO_AMOUNT, TEMPO_REWARD, TEMPO_AMOUNT);
         vm.stopPrank();
 
         // fund() "succeeded" — constructor auto-funded
@@ -758,111 +755,111 @@ contract BatchFundTest is Test {
 
     /// EVM CALL to an address with no code succeeds with empty returndata.
     /// This is the fundamental EVM behavior that enables the silent failure.
+    /// Uses the real wrong target from the failing TX.
     function testCallToEmptyAddressSucceeds() public {
-        address empty = makeAddr("empty");
-        assertEq(empty.code.length, 0, "should have no code");
+        assertEq(TEMPO_WRONG_TARGET.code.length, 0, "wrong target should have no code");
 
-        // Any calldata, any selector — returns success with empty data
-        bytes memory fundCalldata = abi.encodeWithSelector(0x49364cd4, uint256(723471), uint256(100000000));
-        (bool ok, bytes memory ret) = empty.call(fundCalldata);
+        // Exact calldata from the failing TX: obfuscated fund(723471, 100000000)
+        bytes memory fundCalldata = abi.encodeWithSelector(0x49364cd4, TEMPO_REWARD, TEMPO_AMOUNT);
+        (bool ok, bytes memory ret) = TEMPO_WRONG_TARGET.call(fundCalldata);
 
         assertTrue(ok, "call to empty address should succeed");
         assertEq(ret.length, 0, "return data should be empty");
     }
 
-    /// Reproduce the exact Tempo batch failure:
-    /// 1. Deploy escrow at address A
-    /// 2. Approve tokens to address B (wrong, no code)
-    /// 3. Call fund() on address B (wrong, no code) → silent success
-    /// 4. Escrow at A remains unfunded
+    /// Reproduce the exact Tempo batch failure with real on-chain values:
+    ///   TX:     0xedf034653df8ebd016a471bb4c19a1a71b01b39694720ffdde148790b4ac94ae
+    ///   Token:  0x20C0000000000000000000000000000000000000 (PathUSD)
+    ///   Escrow: 0x7e9798a62b42d97fb05b9e092a9a2117fa3fb995 (deployed correctly)
+    ///   Wrong:  0xd69b8fc5d21819a713fde3e051c97e1cb09bd2aa (no code, batch target)
+    ///   Amount: 100000000, Reward: 723471
+    ///
+    /// Steps in the batch:
+    ///   1. CREATE escrow → lands at 0x7e97... (correct)
+    ///   2. approve(0xd69b..., amount) on PathUSD → succeeds (wrong spender)
+    ///   3. fund(723471, 100000000) on 0xd69b... → silent no-op (no code)
+    ///   4. Escrow at 0x7e97... remains unfunded
     function testExactTempoFailure_WrongAddressBatch() public {
-        address tempoToken = address(0x20C0000000000000000000000000000000000000);
+        // Etch a NoOp token at the real PathUSD address
         NoOpToken noOp = new NoOpToken();
-        vm.etch(tempoToken, address(noOp).code);
+        vm.etch(TEMPO_TOKEN, address(noOp).code);
 
         // Step 1: Deploy escrow (unfunded — constructor gets 0,0)
         vm.startPrank(deployer);
-        EscrowERC20 escrow = new EscrowERC20(tempoToken, recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowERC20 escrow = new EscrowERC20(TEMPO_TOKEN, recipient, TEMPO_AMOUNT, 0, 0);
         vm.stopPrank();
 
-        address wrongTarget = makeAddr("wrongTarget"); // simulates 0xd69b...
-
         assertFalse(escrow.funded(), "escrow should start unfunded");
-        assertEq(wrongTarget.code.length, 0, "wrong target has no code");
+        assertEq(TEMPO_WRONG_TARGET.code.length, 0, "0xd69b... has no code on-chain");
 
-        // Step 2: Approve tokens to WRONG address (not the escrow)
+        // Step 2: Approve tokens to WRONG address (0xd69b... instead of escrow)
         vm.prank(deployer);
-        (bool ok1,) = tempoToken.call(
-            abi.encodeWithSignature("approve(address,uint256)", wrongTarget, REWARD + PAYMENT)
+        (bool ok1,) = TEMPO_TOKEN.call(
+            abi.encodeWithSignature("approve(address,uint256)", TEMPO_WRONG_TARGET, TEMPO_REWARD + TEMPO_AMOUNT)
         );
         assertTrue(ok1, "approve should succeed");
 
-        // Step 3: Call fund() on WRONG address (no code → silent success)
-        bytes memory fundCall = abi.encodeWithSelector(0x49364cd4, REWARD, PAYMENT);
+        // Step 3: Call obfuscated fund() on WRONG address (no code → silent success)
+        bytes memory fundCall = abi.encodeWithSelector(0x49364cd4, TEMPO_REWARD, TEMPO_AMOUNT);
         vm.prank(deployer);
-        (bool ok2, bytes memory ret) = wrongTarget.call(fundCall);
+        (bool ok2, bytes memory ret) = TEMPO_WRONG_TARGET.call(fundCall);
 
-        assertTrue(ok2, "call to empty address succeeds (THIS IS THE BUG)");
+        assertTrue(ok2, "call to 0xd69b... succeeds (THIS IS THE BUG)");
         assertEq(ret.length, 0, "empty return - no fund() logic executed");
 
         // Step 4: Escrow is STILL unfunded — the batch "succeeded" but did nothing
-        assertFalse(escrow.funded(), "CONFIRMED: escrow still unfunded after batch");
-
-        // Meanwhile, the correct call WOULD have worked (if sent to escrow):
-        // The escrow has the fund() code, it would execute the transfer logic.
-        // But the batch never called it.
+        assertFalse(escrow.funded(), "CONFIRMED: escrow still unfunded after batch to wrong address");
     }
 
     /// Prove the obfuscated fund() works when called at the correct address.
-    /// Uses the actual escrow's runtime bytecode etched locally.
+    /// Uses the real Tempo token and amounts.
     function testObfuscatedFundWorksAtCorrectAddress() public {
-        address tempoToken = address(0x20C0000000000000000000000000000000000000);
         NoOpToken noOp = new NoOpToken();
-        vm.etch(tempoToken, address(noOp).code);
+        vm.etch(TEMPO_TOKEN, address(noOp).code);
 
         // Deploy a real escrow (unfunded)
         vm.prank(deployer);
-        EscrowERC20 escrow = new EscrowERC20(tempoToken, recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowERC20 escrow = new EscrowERC20(TEMPO_TOKEN, recipient, TEMPO_AMOUNT, 0, 0);
 
         // Call fund() with the ORIGINAL selector on the unobfuscated contract
         vm.prank(deployer);
-        escrow.fund(REWARD, PAYMENT);
+        escrow.fund(TEMPO_REWARD, TEMPO_AMOUNT);
 
-        // fund() works on the real escrow
-        assertTrue(escrow.funded(), "fund() works when called at correct address");
+        // fund() works when called at the correct address
+        assertTrue(escrow.funded(), "fund() works at correct address with real amounts");
+        assertEq(escrow.currentRewardAmount(), TEMPO_REWARD);
+        assertEq(escrow.currentPaymentAmount(), TEMPO_AMOUNT);
     }
 
-    /// Demonstrate that address mismatch in a strict batch causes silent
-    /// funding failure when the wrong address has no code.
+    /// Demonstrate the exact failure in a strict batch context:
+    /// approve + fund both target TEMPO_WRONG_TARGET instead of the escrow.
     function testAddressMismatchInStrictBatch() public {
         vm.startPrank(deployer);
-        EscrowERC20 escrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowERC20 escrow = new EscrowERC20(address(token), recipient, TEMPO_AMOUNT, 0, 0);
         vm.stopPrank();
-
-        address wrongAddr = makeAddr("computedWrongAddress");
 
         StrictBatcher batcher = new StrictBatcher();
         StrictBatcher.Call[] memory calls = new StrictBatcher.Call[](2);
 
-        // Approve to wrong address
+        // Approve to wrong address (0xd69b...)
         calls[0] = StrictBatcher.Call({
             target: address(token),
-            data: abi.encodeWithSignature("approve(address,uint256)", wrongAddr, REWARD + PAYMENT),
+            data: abi.encodeWithSignature("approve(address,uint256)", TEMPO_WRONG_TARGET, TEMPO_REWARD + TEMPO_AMOUNT),
             value: 0
         });
 
         // fund() on wrong address (no code → returns success)
         calls[1] = StrictBatcher.Call({
-            target: wrongAddr,
-            data: abi.encodeWithSelector(EscrowERC20.fund.selector, REWARD, PAYMENT),
+            target: TEMPO_WRONG_TARGET,
+            data: abi.encodeWithSelector(EscrowERC20.fund.selector, TEMPO_REWARD, TEMPO_AMOUNT),
             value: 0
         });
 
-        // The batch SUCCEEDS because both calls return success
+        // The batch SUCCEEDS because both calls return success (empty address)
         vm.prank(deployer);
         batcher.execute(calls);
 
         // But the escrow is not funded
-        assertFalse(escrow.funded(), "escrow unfunded - batch hit wrong address");
+        assertFalse(escrow.funded(), "escrow unfunded - batch hit 0xd69b... instead of escrow");
     }
 }
