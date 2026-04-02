@@ -33,12 +33,13 @@ contract EscrowERC20 is EscrowBase {
     }
 
     constructor(
+        address _deployer,
         address _tokenContract,
         address _expectedRecipient,
         uint256 _expectedAmount,
         uint256 _currentRewardAmount,
         uint256 _currentPaymentAmount
-    ) EscrowBase(_expectedRecipient, _expectedAmount) {
+    ) EscrowBase(_deployer, _expectedRecipient, _expectedAmount) {
         if (_tokenContract == address(0)) revert ZeroAddress();
         tokenContract = _tokenContract;
 

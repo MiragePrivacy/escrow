@@ -101,7 +101,7 @@ contract TempoTest is Test {
         vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
 
         vm.prank(deployer);
-        EscrowERC20 escrow = new EscrowERC20(TOKEN, TO_ADDRESS, AMOUNT, 500e18, 500e18);
+        EscrowERC20 escrow = new EscrowERC20(deployer, TOKEN, TO_ADDRESS, AMOUNT, 500e18, 500e18);
 
         vm.prank(FROM_ADDRESS);
         escrow.bond(250e18);
