@@ -68,8 +68,9 @@ contract EscrowMPTTest is Test {
         // Mock the token transfers for constructor funding
         vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
 
-        EscrowERC20 proofEscrow =
-            new EscrowERC20(deployer, proofTokenAddress, proofRecipient, TRANSFER_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
+        EscrowERC20 proofEscrow = new EscrowERC20(
+            deployer, proofTokenAddress, proofRecipient, TRANSFER_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT
+        );
         vm.stopPrank();
 
         console.log("Proof escrow address:", address(proofEscrow));

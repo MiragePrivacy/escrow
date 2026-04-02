@@ -7,38 +7,23 @@ import "./EscrowNative.sol";
 contract EscrowFactory {
     event EscrowCreated(address indexed deployer, address escrow);
 
-    function createEscrowERC20(
-        uint256 nonce,
-        address tokenContract,
-        address expectedRecipient,
-        uint256 expectedAmount
-    ) external returns (address) {
+    function createEscrowERC20(uint256 nonce, address tokenContract, address expectedRecipient, uint256 expectedAmount)
+        external
+        returns (address)
+    {
         bytes32 salt = _salt(msg.sender, nonce);
-        EscrowERC20 escrow = new EscrowERC20{salt: salt}(
-            msg.sender,
-            tokenContract,
-            expectedRecipient,
-            expectedAmount,
-            0,
-            0
-        );
+        EscrowERC20 escrow =
+            new EscrowERC20{salt: salt}(msg.sender, tokenContract, expectedRecipient, expectedAmount, 0, 0);
         emit EscrowCreated(msg.sender, address(escrow));
         return address(escrow);
     }
 
-    function createEscrowNative(
-        uint256 nonce,
-        address expectedRecipient,
-        uint256 expectedAmount
-    ) external returns (address) {
+    function createEscrowNative(uint256 nonce, address expectedRecipient, uint256 expectedAmount)
+        external
+        returns (address)
+    {
         bytes32 salt = _salt(msg.sender, nonce);
-        EscrowNative escrow = new EscrowNative{salt: salt}(
-            msg.sender,
-            expectedRecipient,
-            expectedAmount,
-            0,
-            0
-        );
+        EscrowNative escrow = new EscrowNative{salt: salt}(msg.sender, expectedRecipient, expectedAmount, 0, 0);
         emit EscrowCreated(msg.sender, address(escrow));
         return address(escrow);
     }

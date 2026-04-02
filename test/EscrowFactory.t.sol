@@ -183,8 +183,7 @@ contract EscrowFactoryTest is Test {
     function testPredictAddressDifferentDeployers() public {
         address other = makeAddr("other");
 
-        address predicted1 =
-            factory.predictEscrowERC20Address(deployer, 0, address(token), recipient, EXPECTED_AMOUNT);
+        address predicted1 = factory.predictEscrowERC20Address(deployer, 0, address(token), recipient, EXPECTED_AMOUNT);
         address predicted2 = factory.predictEscrowERC20Address(other, 0, address(token), recipient, EXPECTED_AMOUNT);
 
         assertTrue(predicted1 != predicted2);
