@@ -5,14 +5,11 @@ import "./EscrowBase.sol";
 
 contract EscrowNative is EscrowBase {
     // Custom errors
-    error IncorrectETHAmount();
     error AlreadyFunded();
-    error ZeroRewardAmount();
-    error ZeroPaymentAmount();
+    error ZeroAmount();
     error InvalidTxProof();
     error InvalidReceiptProof();
     error TxFailed();
-    error InvalidNativeTransfer();
     error ETHTransferFailed();
     error NoWithdrawableFunds();
 
@@ -26,31 +23,23 @@ contract EscrowNative is EscrowBase {
         bytes path; // RLP-encoded index (same for both tx and receipt)
     }
 
-    constructor(
-        address _expectedRecipient,
-        uint256 _expectedAmount,
-        uint256 _currentRewardAmount,
-        uint256 _currentPaymentAmount
-    ) payable EscrowBase(_expectedRecipient, _expectedAmount) {
-        if (_currentRewardAmount > 0 && _currentPaymentAmount > 0) {
-            if (msg.value != _currentRewardAmount + _currentPaymentAmount) revert IncorrectETHAmount();
-            currentRewardAmount = _currentRewardAmount;
-            originalRewardAmount = _currentRewardAmount;
-            currentPaymentAmount = _currentPaymentAmount;
+    constructor(bytes32 _commitment) payable EscrowBase() {
+        if (msg.value > 0) {
+            deposit = msg.value;
+            originalDeposit = msg.value;
+            commitment = _commitment;
             funded = true;
         }
     }
 
-    function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) external payable {
+    function fund(bytes32 _commitment) external payable {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (funded) revert AlreadyFunded();
-        if (_currentRewardAmount == 0) revert ZeroRewardAmount();
-        if (_currentPaymentAmount == 0) revert ZeroPaymentAmount();
-        if (msg.value != _currentRewardAmount + _currentPaymentAmount) revert IncorrectETHAmount();
+        if (msg.value == 0) revert ZeroAmount();
 
-        currentRewardAmount = _currentRewardAmount;
-        originalRewardAmount = _currentRewardAmount;
-        currentPaymentAmount = _currentPaymentAmount;
+        deposit = msg.value;
+        originalDeposit = msg.value;
+        commitment = _commitment;
         funded = true;
     }
 
@@ -65,7 +54,7 @@ contract EscrowNative is EscrowBase {
 
     // Validates native ETH transfer by proving both transaction inclusion (for to/value)
     // and receipt inclusion (for status == 1, i.e., successful execution)
-    function collect(NativeTransferProof calldata proof, uint256 targetBlockNumber) external {
+    function collect(NativeTransferProof calldata proof, uint256 targetBlockNumber, bytes32 salt) external {
         _validateBlockHeader(proof.blockHeader, targetBlockNumber);
 
         // Verify transaction inclusion in transactions trie
@@ -83,9 +72,12 @@ contract EscrowNative is EscrowBase {
         // Validate transaction succeeded (status == 1)
         if (!ReceiptValidator.validateReceiptStatus(proof.receiptRlp)) revert TxFailed();
 
-        // Validate the native ETH transfer (to and value fields)
-        if (!ReceiptValidator.validateNativeTransfer(proof.transactionRlp, expectedRecipient, expectedAmount)) {
-            revert InvalidNativeTransfer();
+        // Extract transfer fields from the proven transaction
+        (address recipient, uint256 amount) = ReceiptValidator.extractNativeTransfer(proof.transactionRlp);
+
+        // Verify commitment: H(recipient, amount, salt)
+        if (keccak256(abi.encodePacked(recipient, amount, salt)) != commitment) {
+            revert CommitmentMismatch();
         }
 
         _payout();
@@ -101,18 +93,17 @@ contract EscrowNative is EscrowBase {
         if (!success) revert ETHTransferFailed();
     }
 
-    /// @notice Cancel and withdraw funds in a single transaction.
-    /// Reverts if a node has already bonded.
+    /// @notice Cancel and withdraw original deposit in a single transaction.
+    /// Reverts if a node has already bonded. Seized bonds remain in the contract.
     function cancelAndWithdraw() external {
         cancellationRequest = true;
         _validateWithdraw();
         _tryResetBondData();
 
-        uint256 withdrawableAmount = _calculateWithdrawableAmount();
+        uint256 withdrawableAmount = originalDeposit;
+        if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 
         _clearWithdrawState();
-
-        if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 
         (bool success,) = msg.sender.call{value: withdrawableAmount}("");
         if (!success) revert ETHTransferFailed();

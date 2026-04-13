@@ -6,16 +6,12 @@ import {EscrowERC20, IERC20} from "../src/EscrowERC20.sol";
 import {ReceiptValidator} from "../src/ReceiptValidator.sol";
 
 contract ReceiptValidatorWrapper {
-    function validateTransferInReceipt(
-        bytes calldata receiptRlp,
-        uint256 logIndex,
-        address tokenContract,
-        address toAddress,
-        uint256 expectedAmount
-    ) external pure returns (bool) {
-        return ReceiptValidator.validateTransferInReceipt(
-            receiptRlp, logIndex, tokenContract, toAddress, expectedAmount
-        );
+    function extractTransferFromReceipt(bytes calldata receiptRlp, uint256 logIndex)
+        external
+        pure
+        returns (address token, address recipient, uint256 amount)
+    {
+        return ReceiptValidator.extractTransferFromReceipt(receiptRlp, logIndex);
     }
 }
 
@@ -70,41 +66,37 @@ contract TempoTest is Test {
         assertEq(uint8(RECEIPT_RLP[0]), 0x76);
     }
 
-    function testValidateTransfer() public view {
-        assertTrue(validator.validateTransferInReceipt(RECEIPT_RLP, 0, TOKEN, TO_ADDRESS, AMOUNT));
+    function testExtractTransfer() public view {
+        (address token, address recipient, uint256 amount) =
+            validator.extractTransferFromReceipt(RECEIPT_RLP, 0);
+        assertEq(token, TOKEN);
+        assertEq(recipient, TO_ADDRESS);
+        assertEq(amount, AMOUNT);
     }
 
-    function testValidateFeeTransfer() public view {
-        assertTrue(validator.validateTransferInReceipt(RECEIPT_RLP, 1, TOKEN, FEE_RECIPIENT, FEE_AMOUNT));
-    }
-
-    function testRejectWrongAmount() public {
-        vm.expectRevert(ReceiptValidator.AmountMismatch.selector);
-        validator.validateTransferInReceipt(RECEIPT_RLP, 0, TOKEN, TO_ADDRESS, AMOUNT + 1);
-    }
-
-    function testRejectWrongRecipient() public {
-        vm.expectRevert(ReceiptValidator.ToAddressMismatch.selector);
-        validator.validateTransferInReceipt(RECEIPT_RLP, 0, TOKEN, address(0xdead), AMOUNT);
-    }
-
-    function testRejectWrongToken() public {
-        vm.expectRevert(ReceiptValidator.WrongTokenContract.selector);
-        validator.validateTransferInReceipt(RECEIPT_RLP, 0, address(0xbeef), TO_ADDRESS, AMOUNT);
+    function testExtractFeeTransfer() public view {
+        (address token, address recipient, uint256 amount) =
+            validator.extractTransferFromReceipt(RECEIPT_RLP, 1);
+        assertEq(token, TOKEN);
+        assertEq(recipient, FEE_RECIPIENT);
+        assertEq(amount, FEE_AMOUNT);
     }
 
     function testEndToEndProof() public {
         address deployer = makeAddr("deployer");
+        bytes32 salt = bytes32(uint256(42));
+        bytes32 commitmentHash = keccak256(abi.encodePacked(TO_ADDRESS, TOKEN, AMOUNT, salt));
 
         vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
         vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
         vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
 
-        vm.prank(deployer);
-        EscrowERC20 escrow = new EscrowERC20(TOKEN, TO_ADDRESS, AMOUNT, 500e18, 500e18);
+        vm.startPrank(deployer);
+        EscrowERC20 escrow = new EscrowERC20(TOKEN, 1000e18, commitmentHash);
+        vm.stopPrank();
 
         vm.prank(FROM_ADDRESS);
-        escrow.bond(250e18);
+        escrow.bond(2.5e18);
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
@@ -118,7 +110,8 @@ contract TempoTest is Test {
                 receiptPath: RECEIPT_PATH,
                 logIndex: 0
             }),
-            BLOCK_NUMBER
+            BLOCK_NUMBER,
+            salt
         );
     }
 }
