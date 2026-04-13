@@ -37,7 +37,7 @@ contract EscrowNativeTest is Test {
 
     function testConstructorNative() public view {
         assertEq(escrow.deposit(), DEPOSIT_AMOUNT);
-        assertEq(escrow.originalDeposit(), DEPOSIT_AMOUNT);
+
         assertEq(escrow.funded(), true);
         assertEq(escrow.commitment(), COMMITMENT);
         assertEq(address(escrow).balance, DEPOSIT_AMOUNT);
@@ -51,7 +51,6 @@ contract EscrowNativeTest is Test {
         vm.stopPrank();
 
         assertEq(escrow2.deposit(), DEPOSIT_AMOUNT);
-        assertEq(escrow2.originalDeposit(), DEPOSIT_AMOUNT);
         assertEq(escrow2.funded(), true);
         assertEq(escrow2.commitment(), COMMITMENT);
         assertEq(address(escrow2).balance, DEPOSIT_AMOUNT);
@@ -130,7 +129,6 @@ contract EscrowNativeTest is Test {
         assertEq(escrow.bondedExecutor(), other);
         assertEq(escrow.deposit(), updatedDeposit);
         assertEq(escrow.bondAmount(), newBondAmount);
-        assertEq(escrow.totalBondsDeposited(), BOND_AMOUNT);
     }
 
     function testBondNativeRequiresUpdatedDepositMinimum() public {
@@ -152,7 +150,6 @@ contract EscrowNativeTest is Test {
         assertEq(escrow.deposit(), updatedDeposit);
         assertEq(escrow.bondAmount(), minimumRequiredBond);
         assertEq(escrow.bondedExecutor(), other);
-        assertEq(escrow.totalBondsDeposited(), BOND_AMOUNT);
     }
 
     function testCollectNativeRequiresProof() public {
@@ -340,7 +337,7 @@ contract EscrowNativeTest is Test {
 
         assertTrue(escrow.cancellationRequest());
         assertFalse(escrow.funded());
-        assertEq(deployer.balance, initialBalance + DEPOSIT_AMOUNT);
+        assertEq(deployer.balance, initialBalance + DEPOSIT_AMOUNT + BOND_AMOUNT);
     }
 
     function testCancelAndWithdrawNativePreventsRaceCondition() public {
@@ -379,10 +376,9 @@ contract EscrowNativeTest is Test {
         vm.prank(deployer);
         escrow.cancelAndWithdraw();
 
-        // Deployer gets back original deposit only
-        assertEq(deployer.balance, initialBalance + DEPOSIT_AMOUNT);
-        // Escrow holds the seized bond
-        assertEq(address(escrow).balance, BOND_AMOUNT);
+        // Deployer gets back everything (deposit + seized bond)
+        assertEq(deployer.balance, initialBalance + DEPOSIT_AMOUNT + BOND_AMOUNT);
+        assertEq(address(escrow).balance, 0);
     }
 
     function _bondExecutor() internal {

@@ -21,23 +21,17 @@ abstract contract EscrowBase {
     error InsufficientBond();
     error CommitmentMismatch();
 
-    // The following variables are set up in the constructor.
     address immutable deployerAddress;
-    uint256 public deposit; // Current deposit amount (grows as bonds are seized)
-    uint256 public originalDeposit; // Snapshot of initial deposit for withdraw
+    uint256 public deposit; // Total deposited (original + seized bonds)
+    bytes32 public commitment; // H(recipient, [token,] amount, salt)
 
-    // Commitment hash for the expected transfer (set at fund time)
-    bytes32 public commitment;
+    uint256 public constant MAX_BLOCK_LOOKBACK = 256;
 
-    uint256 public constant MAX_BLOCK_LOOKBACK = 256; // Maximum blocks to look back for validation
-
-    // The following variables are dynamically adjusted by the contract when a bond or cancellation request is submitted.
     address public bondedExecutor;
     uint256 public executionDeadline;
     uint256 public bondAmount;
-    uint256 public totalBondsDeposited;
     bool public cancellationRequest;
-    bool public funded; // marks if the contract has funds to pay out the executors or not (if it doesn't have funds, no executor should be accepted)
+    bool public funded;
 
     constructor() {
         deployerAddress = msg.sender;
@@ -88,7 +82,6 @@ abstract contract EscrowBase {
     function _handleExpiredBond() internal {
         if (executionDeadline > 0 && block.timestamp > executionDeadline) {
             deposit += bondAmount;
-            totalBondsDeposited += bondAmount;
             _tryResetBondData();
         }
     }
@@ -115,7 +108,6 @@ abstract contract EscrowBase {
         executionDeadline = 0;
         funded = false;
         deposit = 0;
-        originalDeposit = 0;
         commitment = bytes32(0);
     }
 
@@ -134,7 +126,6 @@ abstract contract EscrowBase {
     function _clearWithdrawState() internal {
         funded = false;
         deposit = 0;
-        originalDeposit = 0;
         commitment = bytes32(0);
     }
 }

@@ -49,7 +49,6 @@ contract EscrowERC20 is EscrowBase {
         if (_amount == 0) revert ZeroAmount();
 
         deposit = _amount;
-        originalDeposit = _amount;
         commitment = _commitment;
         if (!IERC20(tokenContract).transferFrom(msg.sender, address(this), _amount)) {
             revert TokenTransferFailed();
@@ -109,14 +108,15 @@ contract EscrowERC20 is EscrowBase {
         if (!success) revert TokenTransferFailed();
     }
 
-    /// @notice Cancel and withdraw original deposit in a single transaction.
-    /// Reverts if a node has already bonded. Seized bonds remain in the contract.
+    /// @notice Cancel and withdraw all funds in a single transaction.
+    /// Reverts if a bond is still active.
     function cancelAndWithdraw() external {
         cancellationRequest = true;
         _validateWithdraw();
+        _handleExpiredBond();
         _tryResetBondData();
 
-        uint256 withdrawableAmount = originalDeposit;
+        uint256 withdrawableAmount = deposit;
         if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 
         _clearWithdrawState();

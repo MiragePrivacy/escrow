@@ -26,7 +26,6 @@ contract EscrowNative is EscrowBase {
     constructor(bytes32 _commitment) payable EscrowBase() {
         if (msg.value > 0) {
             deposit = msg.value;
-            originalDeposit = msg.value;
             commitment = _commitment;
             funded = true;
         }
@@ -38,7 +37,6 @@ contract EscrowNative is EscrowBase {
         if (msg.value == 0) revert ZeroAmount();
 
         deposit = msg.value;
-        originalDeposit = msg.value;
         commitment = _commitment;
         funded = true;
     }
@@ -93,14 +91,15 @@ contract EscrowNative is EscrowBase {
         if (!success) revert ETHTransferFailed();
     }
 
-    /// @notice Cancel and withdraw original deposit in a single transaction.
-    /// Reverts if a node has already bonded. Seized bonds remain in the contract.
+    /// @notice Cancel and withdraw all funds in a single transaction.
+    /// Reverts if a bond is still active.
     function cancelAndWithdraw() external {
         cancellationRequest = true;
         _validateWithdraw();
+        _handleExpiredBond();
         _tryResetBondData();
 
-        uint256 withdrawableAmount = originalDeposit;
+        uint256 withdrawableAmount = deposit;
         if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 
         _clearWithdrawState();

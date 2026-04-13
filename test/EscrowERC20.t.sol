@@ -89,7 +89,6 @@ contract EscrowERC20Test is Test {
         vm.stopPrank();
 
         assertEq(escrow2.deposit(), DEPOSIT_AMOUNT);
-        assertEq(escrow2.originalDeposit(), DEPOSIT_AMOUNT);
         assertEq(escrow2.funded(), true);
         assertEq(escrow2.commitment(), COMMITMENT);
         assertEq(token.balanceOf(address(escrow2)), DEPOSIT_AMOUNT);
@@ -179,7 +178,6 @@ contract EscrowERC20Test is Test {
         assertEq(escrow.bondedExecutor(), other);
         assertEq(escrow.deposit(), updatedDeposit);
         assertEq(escrow.bondAmount(), newBondAmount);
-        assertEq(escrow.totalBondsDeposited(), BOND_AMOUNT);
     }
 
     function testBondRequiresUpdatedDepositMinimum() public {
@@ -203,7 +201,6 @@ contract EscrowERC20Test is Test {
         assertEq(escrow.deposit(), updatedDeposit);
         assertEq(escrow.bondAmount(), minimumRequiredBond);
         assertEq(escrow.bondedExecutor(), other);
-        assertEq(escrow.totalBondsDeposited(), BOND_AMOUNT);
     }
 
     function testRequestCancellation() public {
@@ -392,7 +389,7 @@ contract EscrowERC20Test is Test {
 
         assertTrue(escrow.cancellationRequest());
         assertFalse(escrow.funded());
-        assertEq(token.balanceOf(deployer), initialBalance + DEPOSIT_AMOUNT);
+        assertEq(token.balanceOf(deployer), initialBalance + DEPOSIT_AMOUNT + BOND_AMOUNT);
     }
 
     function testCancelAndWithdrawPreventsRaceCondition() public {
@@ -436,10 +433,9 @@ contract EscrowERC20Test is Test {
         vm.prank(deployer);
         escrow.cancelAndWithdraw();
 
-        // Deployer gets back original deposit only
-        assertEq(token.balanceOf(deployer), initialBalance + DEPOSIT_AMOUNT);
-        // Escrow holds the seized bond
-        assertEq(token.balanceOf(address(escrow)), BOND_AMOUNT);
+        // Deployer gets back everything (deposit + seized bond)
+        assertEq(token.balanceOf(deployer), initialBalance + DEPOSIT_AMOUNT + BOND_AMOUNT);
+        assertEq(token.balanceOf(address(escrow)), 0);
     }
 
     function _bondExecutor() internal {
