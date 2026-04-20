@@ -67,16 +67,14 @@ contract TempoTest is Test {
     }
 
     function testExtractTransfer() public view {
-        (address token, address recipient, uint256 amount) =
-            validator.extractTransferFromReceipt(RECEIPT_RLP, 0);
+        (address token, address recipient, uint256 amount) = validator.extractTransferFromReceipt(RECEIPT_RLP, 0);
         assertEq(token, TOKEN);
         assertEq(recipient, TO_ADDRESS);
         assertEq(amount, AMOUNT);
     }
 
     function testExtractFeeTransfer() public view {
-        (address token, address recipient, uint256 amount) =
-            validator.extractTransferFromReceipt(RECEIPT_RLP, 1);
+        (address token, address recipient, uint256 amount) = validator.extractTransferFromReceipt(RECEIPT_RLP, 1);
         assertEq(token, TOKEN);
         assertEq(recipient, FEE_RECIPIENT);
         assertEq(amount, FEE_AMOUNT);

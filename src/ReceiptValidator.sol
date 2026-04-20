@@ -208,11 +208,7 @@ library ReceiptValidator {
      * @return recipient The transfer recipient
      * @return amount The transfer value
      */
-    function extractNativeTransfer(bytes calldata txRlp)
-        internal
-        pure
-        returns (address recipient, uint256 amount)
-    {
+    function extractNativeTransfer(bytes calldata txRlp) internal pure returns (address recipient, uint256 amount) {
         uint256 offset = 0;
 
         // Skip type prefix for typed transactions (EIP-2718)
