@@ -114,11 +114,7 @@ contract EscrowERC20Delayed {
     /// previous user abandoned without funding. Partial balances from
     /// prior activity are intentionally retained and count toward the new
     /// deposit. See the reuse-risk note at the top of the contract.
-    function reinit(
-        address _expectedRecipient,
-        uint256 _expectedAmount,
-        uint256 _currentRewardAmount
-    ) external {
+    function reinit(address _expectedRecipient, uint256 _expectedAmount, uint256 _currentRewardAmount) external {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (fundedState == 2) revert AlreadyArmed();
         if (is_bonded()) revert BondActive();
@@ -198,11 +194,9 @@ contract EscrowERC20Delayed {
             revert InvalidReceiptProof();
         }
 
-        if (
-            !ReceiptValidator.validateTransferInReceipt(
+        if (!ReceiptValidator.validateTransferInReceipt(
                 proof.receiptRlp, proof.logIndex, tokenContract, expectedRecipient, expectedAmount
-            )
-        ) {
+            )) {
             revert InvalidTransferEvent();
         }
 
