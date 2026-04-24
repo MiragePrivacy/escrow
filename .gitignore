@@ -1,10 +1,15 @@
 # Compiler files
 cache/
-out/
+out/*
 !out/EscrowNative.sol/
+out/EscrowNative.sol/*
 !out/EscrowNative.sol/EscrowNative.json
 !out/EscrowERC20.sol/
+out/EscrowERC20.sol/*
 !out/EscrowERC20.sol/EscrowERC20.json
+!out/EscrowERC20Delayed.sol/
+out/EscrowERC20Delayed.sol/*
+!out/EscrowERC20Delayed.sol/EscrowERC20Delayed.json
 
 # Ignores development broadcast logs
 !/broadcast

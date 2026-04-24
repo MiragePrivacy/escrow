@@ -8,6 +8,8 @@ on:
       - "artifacts/native_runtime.hex"
       - "artifacts/erc20_deployment.hex"
       - "artifacts/erc20_runtime.hex"
+      - "artifacts/delayed_deployment.hex"
+      - "artifacts/delayed_runtime.hex"
   push:
     paths:
       - "src/**"
@@ -15,6 +17,8 @@ on:
       - "artifacts/native_runtime.hex"
       - "artifacts/erc20_deployment.hex"
       - "artifacts/erc20_runtime.hex"
+      - "artifacts/delayed_deployment.hex"
+      - "artifacts/delayed_runtime.hex"
   workflow_dispatch:
 
 jobs:
@@ -71,7 +75,7 @@ jobs:
           if echo "$CHANGED_FILES" | grep -qE '^src/'; then
             echo "Detected changes in src/."
             MISSING=()
-            for f in native_deployment native_runtime erc20_deployment erc20_runtime; do
+            for f in native_deployment native_runtime erc20_deployment erc20_runtime delayed_deployment delayed_runtime; do
               if echo "$CHANGED_FILES" | grep -qE "^artifacts/${f}\\.hex$"; then
                 echo "artifacts/${f}.hex changed as expected."
               else
