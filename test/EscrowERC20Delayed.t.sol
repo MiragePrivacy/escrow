@@ -60,12 +60,7 @@ contract EscrowERC20DelayedTest is Test {
         vm.startPrank(deployer);
         token = new MockERC20();
         token.mint(deployer, 10000e18);
-        escrow = new EscrowERC20Delayed(
-            address(token),
-            recipient,
-            EXPECTED_AMOUNT,
-            REWARD_AMOUNT
-        );
+        escrow = new EscrowERC20Delayed(address(token), recipient, EXPECTED_AMOUNT, REWARD_AMOUNT);
         vm.stopPrank();
 
         token.mint(executor, 10000e18);
