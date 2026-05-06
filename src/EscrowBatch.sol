@@ -141,11 +141,9 @@ contract EscrowBatch is IEscrowBatch {
 
         for (uint256 i = 0; i < expectedCount;) {
             IEscrowBatch.BatchTransfer storage expectedTransfer = expectedTransfers[i];
-            if (
-                !ReceiptValidator.validateTransferInReceipt(
+            if (!ReceiptValidator.validateTransferInReceipt(
                     proof.receiptRlp, logIndexes[i], tokenContract, expectedTransfer.recipient, expectedTransfer.amount
-                )
-            ) revert InvalidTransferEvent();
+                )) revert InvalidTransferEvent();
 
             unchecked {
                 ++i;
