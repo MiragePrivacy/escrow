@@ -2,7 +2,9 @@
 pragma solidity ^0.8.30;
 
 import {Test, console} from "forge-std/Test.sol";
+import {EscrowBatch} from "../src/EscrowBatch.sol";
 import {EscrowERC20, IERC20} from "../src/EscrowERC20.sol";
+import {IEscrowBatch} from "../src/IEscrowBatch.sol";
 import {ReceiptValidator} from "../src/ReceiptValidator.sol";
 
 contract ReceiptValidatorWrapper {
@@ -120,5 +122,45 @@ contract TempoTest is Test {
             }),
             BLOCK_NUMBER
         );
+    }
+
+    function testEndToEndBatchProof() public {
+        address deployer = makeAddr("deployer");
+
+        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
+
+        IEscrowBatch.BatchTransfer[] memory transfers = new IEscrowBatch.BatchTransfer[](2);
+        transfers[0] = IEscrowBatch.BatchTransfer({recipient: TO_ADDRESS, amount: AMOUNT});
+        transfers[1] = IEscrowBatch.BatchTransfer({recipient: FEE_RECIPIENT, amount: FEE_AMOUNT});
+
+        vm.prank(deployer);
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18);
+
+        vm.prank(FROM_ADDRESS);
+        escrow.bond(250e18);
+
+        vm.roll(BLOCK_NUMBER + 10);
+        vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
+
+        IEscrowBatch.BatchReceiptProof memory proof = IEscrowBatch.BatchReceiptProof({
+            blockHeader: BLOCK_HEADER,
+            receiptRlp: RECEIPT_RLP,
+            proofNodes: PROOF_NODES,
+            receiptPath: RECEIPT_PATH,
+            targetBlockNumber: BLOCK_NUMBER
+        });
+        uint256[] memory logIndexes = new uint256[](2);
+        logIndexes[0] = 0;
+        logIndexes[1] = 1;
+
+        vm.prank(FROM_ADDRESS);
+        escrow.collect(proof, logIndexes);
+
+        assertFalse(escrow.funded());
+        assertEq(escrow.currentPaymentAmount(), 0);
+        assertEq(escrow.currentRewardAmount(), 0);
+        assertEq(escrow.bondedExecutor(), address(0));
     }
 }
