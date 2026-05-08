@@ -17,6 +17,7 @@ library ReceiptValidator {
     error WrongTokenContract();
     error WrongEventSignature();
     error ToAddressMismatch();
+    error FromAddressMismatch();
     error AmountMismatch();
     error ReceiptStatusNotSuccess();
     error UnsupportedTxType();
@@ -40,6 +41,33 @@ library ReceiptValidator {
         address toAddress,
         uint256 expectedAmount
     ) internal pure returns (bool) {
+        return _validateTransferInReceipt(
+            receiptRlp, logIndex, tokenContract, address(0), false, toAddress, expectedAmount
+        );
+    }
+
+    function validateTransferFromInReceipt(
+        bytes calldata receiptRlp,
+        uint256 logIndex,
+        address tokenContract,
+        address fromAddress,
+        address toAddress,
+        uint256 expectedAmount
+    ) internal pure returns (bool) {
+        return _validateTransferInReceipt(
+            receiptRlp, logIndex, tokenContract, fromAddress, true, toAddress, expectedAmount
+        );
+    }
+
+    function _validateTransferInReceipt(
+        bytes calldata receiptRlp,
+        uint256 logIndex,
+        address tokenContract,
+        address fromAddress,
+        bool checkFromAddress,
+        address toAddress,
+        uint256 expectedAmount
+    ) private pure returns (bool) {
         uint256 offset = 0;
 
         // Handle typed receipts (EIP-2718)
@@ -80,7 +108,9 @@ library ReceiptValidator {
         }
 
         // Validate the target log
-        return validateTransferLog(receiptRlp, offset, tokenContract, toAddress, expectedAmount);
+        return validateTransferLog(
+            receiptRlp, offset, tokenContract, fromAddress, checkFromAddress, toAddress, expectedAmount
+        );
     }
 
     /**
@@ -96,6 +126,8 @@ library ReceiptValidator {
         bytes calldata receiptRlp,
         uint256 logOffset,
         address tokenContract,
+        address fromAddress,
+        bool checkFromAddress,
         address toAddress,
         uint256 expectedAmount
     ) private pure returns (bool) {
@@ -119,7 +151,7 @@ library ReceiptValidator {
         offset += 21;
 
         // Parse and validate topics
-        return validateTransferTopics(receiptRlp, offset, toAddress, expectedAmount);
+        return validateTransferTopics(receiptRlp, offset, fromAddress, checkFromAddress, toAddress, expectedAmount);
     }
 
     /**
@@ -133,6 +165,8 @@ library ReceiptValidator {
     function validateTransferTopics(
         bytes calldata receiptRlp,
         uint256 topicsOffset,
+        address fromAddress,
+        bool checkFromAddress,
         address toAddress,
         uint256 expectedAmount
     ) private pure returns (bool) {
@@ -150,8 +184,12 @@ library ReceiptValidator {
         bytes32 eventSig = receiptRlp.extractBytes32(offset);
         if (eventSig != TRANSFER_EVENT_SIG) revert WrongEventSignature();
 
-        // Check second topic (from address) --skip validation
+        // Check second topic (from address)
         offset = receiptRlp.skipItem(offset);
+        if (checkFromAddress) {
+            bytes32 logFromAddr = receiptRlp.extractBytes32(offset);
+            if (address(uint160(uint256(logFromAddr))) != fromAddress) revert FromAddressMismatch();
+        }
 
         // Check third topic (to address)
         offset = receiptRlp.skipItem(offset);
@@ -281,5 +319,191 @@ library ReceiptValidator {
         if (value != expectedAmount) revert AmountMismatch();
 
         return true;
+    }
+
+    function validateNativeTransferFrom(
+        bytes calldata txRlp,
+        address expectedSender,
+        address expectedRecipient,
+        uint256 expectedAmount
+    ) internal pure returns (bool) {
+        if (txRlp.length == 0 || uint8(txRlp[0]) != 0x02) revert UnsupportedTxType();
+
+        (uint256 listOffset, uint256 payloadLength) = _decodeList(txRlp, 1);
+        uint256 offset = listOffset;
+        uint256 listEnd = listOffset + payloadLength;
+        uint256 signingPayloadEnd;
+        address to;
+        uint256 value;
+        uint8 yParity;
+        bytes32 r;
+        bytes32 s;
+
+        for (uint256 i = 0; i < 12;) {
+            if (offset >= listEnd) revert InvalidRLP();
+            if (i == 5) {
+                to = _readAddress(txRlp, offset);
+            } else if (i == 6) {
+                value = _readUint(txRlp, offset);
+            } else if (i == 8) {
+                signingPayloadEnd = _skipCalldataItem(txRlp, offset);
+            } else if (i == 9) {
+                yParity = uint8(_readUint(txRlp, offset));
+            } else if (i == 10) {
+                r = _readBytes32(txRlp, offset);
+            } else if (i == 11) {
+                s = _readBytes32(txRlp, offset);
+            }
+
+            offset = _skipCalldataItem(txRlp, offset);
+            unchecked {
+                ++i;
+            }
+        }
+
+        if (offset != listEnd || signingPayloadEnd == 0) revert InvalidRLP();
+        if (to != expectedRecipient) revert RecipientMismatch();
+        if (value != expectedAmount) revert AmountMismatch();
+
+        bytes memory signingPayload = _encodeTypedSigningPayload(txRlp, listOffset, signingPayloadEnd);
+        address recovered = ecrecover(keccak256(signingPayload), yParity + 27, r, s);
+        if (recovered == address(0) || recovered != expectedSender) revert FromAddressMismatch();
+
+        return true;
+    }
+
+    function _decodeList(bytes calldata data, uint256 offset)
+        private
+        pure
+        returns (uint256 contentOffset, uint256 payloadLength)
+    {
+        if (offset >= data.length) revert InvalidRLP();
+
+        uint8 prefix = uint8(data[offset]);
+        if (prefix < 0xc0) revert InvalidRLP();
+
+        if (prefix < 0xf8) {
+            return (offset + 1, prefix - 0xc0);
+        }
+
+        uint256 lengthBytes = prefix - 0xf7;
+        payloadLength = _readBigEndian(data, offset + 1, lengthBytes);
+        contentOffset = offset + 1 + lengthBytes;
+    }
+
+    function _skipCalldataItem(bytes calldata data, uint256 offset) private pure returns (uint256) {
+        if (offset >= data.length) revert InvalidRLP();
+
+        uint8 prefix = uint8(data[offset]);
+        if (prefix < 0x80) {
+            return offset + 1;
+        }
+        if (prefix < 0xb8) {
+            return offset + 1 + (prefix - 0x80);
+        }
+        if (prefix < 0xc0) {
+            uint256 lengthBytes = prefix - 0xb7;
+            return offset + 1 + lengthBytes + _readBigEndian(data, offset + 1, lengthBytes);
+        }
+        if (prefix < 0xf8) {
+            return offset + 1 + (prefix - 0xc0);
+        }
+
+        uint256 listLengthBytes = prefix - 0xf7;
+        return offset + 1 + listLengthBytes + _readBigEndian(data, offset + 1, listLengthBytes);
+    }
+
+    function _readUint(bytes calldata data, uint256 offset) private pure returns (uint256 value) {
+        if (offset >= data.length) revert InvalidRLP();
+
+        uint8 prefix = uint8(data[offset]);
+        if (prefix < 0x80) {
+            return prefix;
+        }
+        if (prefix == 0x80) {
+            return 0;
+        }
+        if (prefix < 0xb8) {
+            uint256 length = prefix - 0x80;
+            if (length > 32) revert InvalidRLP();
+            return _readBigEndian(data, offset + 1, length);
+        }
+        if (prefix < 0xc0) {
+            uint256 lengthBytes = prefix - 0xb7;
+            uint256 length = _readBigEndian(data, offset + 1, lengthBytes);
+            if (length > 32) revert InvalidRLP();
+            return _readBigEndian(data, offset + 1 + lengthBytes, length);
+        }
+
+        revert InvalidRLP();
+    }
+
+    function _readAddress(bytes calldata data, uint256 offset) private pure returns (address value) {
+        if (offset >= data.length || uint8(data[offset]) != 0x94) revert InvalidAddress();
+        assembly {
+            value := shr(96, calldataload(add(data.offset, add(offset, 1))))
+        }
+    }
+
+    function _readBytes32(bytes calldata data, uint256 offset) private pure returns (bytes32) {
+        return bytes32(_readUint(data, offset));
+    }
+
+    function _readBigEndian(bytes calldata data, uint256 offset, uint256 length) private pure returns (uint256 value) {
+        if (offset + length > data.length) revert InvalidRLP();
+        for (uint256 i = 0; i < length;) {
+            value = (value << 8) | uint8(data[offset + i]);
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _encodeTypedSigningPayload(bytes calldata txRlp, uint256 listOffset, uint256 signingPayloadEnd)
+        private
+        pure
+        returns (bytes memory payload)
+    {
+        uint256 signingPayloadLength = signingPayloadEnd - listOffset;
+        uint256 prefixLength = _listPrefixLength(signingPayloadLength);
+        payload = new bytes(1 + prefixLength + signingPayloadLength);
+        payload[0] = bytes1(uint8(0x02));
+
+        uint256 writeOffset = 1;
+        if (signingPayloadLength < 56) {
+            payload[writeOffset] = bytes1(uint8(0xc0 + signingPayloadLength));
+            writeOffset += 1;
+        } else {
+            uint256 lengthBytes = _uintByteLength(signingPayloadLength);
+            payload[writeOffset] = bytes1(uint8(0xf7 + lengthBytes));
+            writeOffset += 1;
+            for (uint256 i = lengthBytes; i > 0;) {
+                unchecked {
+                    --i;
+                }
+                payload[writeOffset + i] = bytes1(uint8(signingPayloadLength));
+                signingPayloadLength >>= 8;
+            }
+            writeOffset += lengthBytes;
+        }
+
+        for (uint256 i = listOffset; i < signingPayloadEnd;) {
+            payload[writeOffset] = txRlp[i];
+            writeOffset += 1;
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _listPrefixLength(uint256 payloadLength) private pure returns (uint256) {
+        return payloadLength < 56 ? 1 : 1 + _uintByteLength(payloadLength);
+    }
+
+    function _uintByteLength(uint256 value) private pure returns (uint256 length) {
+        do {
+            length += 1;
+            value >>= 8;
+        } while (value != 0);
     }
 }

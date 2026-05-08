@@ -2,9 +2,17 @@
 pragma solidity 0.8.30;
 
 interface IEscrowBatch {
+    enum AssetType {
+        ERC20,
+        NATIVE
+    }
+
     struct BatchTransfer {
+        AssetType assetType;
+        address asset;
         address recipient;
         uint256 amount;
+        uint256 rewardWeight;
     }
 
     struct BatchReceiptProof {
@@ -15,5 +23,16 @@ interface IEscrowBatch {
         uint256 targetBlockNumber;
     }
 
-    function collect(BatchReceiptProof calldata proof, uint256[] calldata logIndexes) external;
+    struct BatchProof {
+        AssetType proofType;
+        BatchReceiptProof receiptProof;
+        bytes transactionRlp;
+        bytes txProofNodes;
+        uint256[] transferIndexes;
+        uint256[] logIndexes;
+    }
+
+    function bond(uint256[] calldata transferIndexes, uint256 bondAmount) external;
+
+    function collect(BatchProof[] calldata proofs) external;
 }
