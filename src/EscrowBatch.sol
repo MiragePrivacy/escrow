@@ -530,9 +530,9 @@ contract EscrowBatch is IEscrowBatch {
             )) revert InvalidReceiptProof();
 
         if (!ReceiptValidator.validateReceiptStatus(batchProof.receiptProof.receiptRlp)) revert TxFailed();
-        if (!ReceiptValidator.validateNativeTransfer(
-                batchProof.transactionRlp, expectedRecipient, expectedAmount
-            )) revert InvalidNativeTransfer();
+        if (!ReceiptValidator.validateNativeTransfer(batchProof.transactionRlp, expectedRecipient, expectedAmount)) {
+            revert InvalidNativeTransfer();
+        }
     }
 
     function _validateBlockHeader(bytes calldata blockHeader, uint256 targetBlockNumber) internal view {
