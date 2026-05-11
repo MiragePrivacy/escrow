@@ -4,21 +4,11 @@ on:
   pull_request:
     paths:
       - "src/**"
-      - "artifacts/native_deployment.hex"
-      - "artifacts/native_runtime.hex"
-      - "artifacts/erc20_deployment.hex"
-      - "artifacts/erc20_runtime.hex"
-      - "artifacts/erc20_batch_deployment.hex"
-      - "artifacts/erc20_batch_runtime.hex"
+      - "artifacts/**"
   push:
     paths:
       - "src/**"
-      - "artifacts/native_deployment.hex"
-      - "artifacts/native_runtime.hex"
-      - "artifacts/erc20_deployment.hex"
-      - "artifacts/erc20_runtime.hex"
-      - "artifacts/erc20_batch_deployment.hex"
-      - "artifacts/erc20_batch_runtime.hex"
+      - "artifacts/**"
   workflow_dispatch:
 
 jobs:
@@ -31,6 +21,14 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0  # needed to diff
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - uses: cachix/cachix-action@v15
+        with:
+          name: devenv
 
       - name: Determine diff range
         id: range
@@ -74,18 +72,17 @@ jobs:
 
           if echo "$CHANGED_FILES" | grep -qE '^src/'; then
             echo "Detected changes in src/."
-            MISSING=()
-            for f in native_deployment native_runtime erc20_deployment erc20_runtime erc20_batch_deployment erc20_batch_runtime; do
-              if echo "$CHANGED_FILES" | grep -qE "^artifacts/${f}\\.hex$"; then
-                echo "artifacts/${f}.hex changed as expected."
-              else
-                MISSING+=("artifacts/${f}.hex")
-              fi
-            done
-            if [[ ${#MISSING[@]} -gt 0 ]]; then
-              echo "::error title=Bytecode not updated::Changes in src/ require updated artifacts: ${MISSING[*]}"
+            nix develop -c ./scripts/update_artifacts.sh
+
+            ARTIFACT_STATUS="$(git status --short -- artifacts)"
+            if [[ -n "$ARTIFACT_STATUS" ]]; then
+              echo "::error title=Bytecode artifacts out of date::Run 'make artifacts' and commit the generated artifact changes."
+              echo "$ARTIFACT_STATUS" | sed 's/^/ - /'
+              git diff -- artifacts || true
               exit 1
             fi
+
+            echo "Bytecode artifacts are up-to-date."
           else
             echo "No changes in src/; no bytecode update required."
           fi
