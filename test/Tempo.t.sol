@@ -258,69 +258,6 @@ contract TempoTest is Test {
         escrow.collect(proofs);
     }
 
-    function testBatchProofRejectsTransferFromDifferentExecutor() public {
-        address deployer = makeAddr("deployer");
-        address secondExecutor = makeAddr("secondExecutor");
-
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
-
-        IEscrowBatch.BatchTransfer[] memory transfers = new IEscrowBatch.BatchTransfer[](2);
-        transfers[0] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
-        transfers[1] = _erc20BatchTransfer(FEE_RECIPIENT, FEE_AMOUNT);
-
-        vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18);
-
-        uint256[] memory firstTransferIndexes = new uint256[](1);
-        firstTransferIndexes[0] = 0;
-        uint256[] memory secondTransferIndexes = new uint256[](1);
-        secondTransferIndexes[0] = 1;
-
-        vm.prank(FROM_ADDRESS);
-        escrow.bond(firstTransferIndexes, 250e18);
-
-        vm.prank(secondExecutor);
-        escrow.bond(secondTransferIndexes, 250e18);
-
-        vm.roll(BLOCK_NUMBER + 10);
-        vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
-
-        IEscrowBatch.BatchReceiptProof memory proof = IEscrowBatch.BatchReceiptProof({
-            blockHeader: BLOCK_HEADER,
-            receiptRlp: RECEIPT_RLP,
-            proofNodes: PROOF_NODES,
-            receiptPath: RECEIPT_PATH,
-            targetBlockNumber: BLOCK_NUMBER
-        });
-
-        uint256[] memory firstLogIndexes = new uint256[](1);
-        firstLogIndexes[0] = 0;
-        IEscrowBatch.BatchProof[] memory firstProofs = new IEscrowBatch.BatchProof[](1);
-        firstProofs[0] = _erc20BatchProof(proof, firstTransferIndexes, firstLogIndexes);
-
-        vm.prank(FROM_ADDRESS);
-        escrow.collect(firstProofs);
-
-        assertTrue(escrow.funded());
-        assertEq(escrow.activeReservationCount(), 1);
-        assertEq(escrow.completedTransferCount(), 1);
-
-        uint256[] memory secondLogIndexes = new uint256[](1);
-        secondLogIndexes[0] = 1;
-        IEscrowBatch.BatchProof[] memory secondProofs = new IEscrowBatch.BatchProof[](1);
-        secondProofs[0] = _erc20BatchProof(proof, secondTransferIndexes, secondLogIndexes);
-
-        vm.prank(secondExecutor);
-        vm.expectRevert(ReceiptValidator.FromAddressMismatch.selector);
-        escrow.collect(secondProofs);
-
-        assertTrue(escrow.funded());
-        assertEq(escrow.activeReservationCount(), 1);
-        assertEq(escrow.completedTransferCount(), 1);
-    }
-
     function _erc20BatchTransfer(address recipient, uint256 amount)
         internal
         pure

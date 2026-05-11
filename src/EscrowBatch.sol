@@ -443,11 +443,10 @@ contract EscrowBatch is IEscrowBatch {
         for (uint256 i = 0; i < batchProof.transferIndexes.length;) {
             uint256 transferIndex = batchProof.transferIndexes[i];
             IEscrowBatch.BatchTransfer storage expectedTransfer = expectedTransfers[transferIndex];
-            if (!ReceiptValidator.validateTransferFromInReceipt(
+            if (!ReceiptValidator.validateTransferInReceipt(
                     batchProof.receiptProof.receiptRlp,
                     batchProof.logIndexes[i],
                     expectedTransfer.asset,
-                    msg.sender,
                     expectedTransfer.recipient,
                     expectedTransfer.amount
                 )) revert InvalidTransferEvent();
@@ -531,8 +530,8 @@ contract EscrowBatch is IEscrowBatch {
             )) revert InvalidReceiptProof();
 
         if (!ReceiptValidator.validateReceiptStatus(batchProof.receiptProof.receiptRlp)) revert TxFailed();
-        if (!ReceiptValidator.validateNativeTransferFrom(
-                batchProof.transactionRlp, msg.sender, expectedRecipient, expectedAmount
+        if (!ReceiptValidator.validateNativeTransfer(
+                batchProof.transactionRlp, expectedRecipient, expectedAmount
             )) revert InvalidNativeTransfer();
     }
 
