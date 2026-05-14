@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.30;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {EscrowERC20} from "../src/EscrowERC20.sol";
 import {EscrowBase} from "../src/EscrowBase.sol";
 

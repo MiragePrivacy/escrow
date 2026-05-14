@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.30;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {EscrowBatch} from "../src/EscrowBatch.sol";
 import {EscrowERC20, IERC20} from "../src/EscrowERC20.sol";
-import {IEscrowBatch} from "../src/IEscrowBatch.sol";
 import {ReceiptValidator} from "../src/ReceiptValidator.sol";
 
 contract ReceiptValidatorWrapper {
@@ -131,7 +130,7 @@ contract TempoTest is Test {
         vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
         vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
 
-        IEscrowBatch.BatchTransfer[] memory transfers = new IEscrowBatch.BatchTransfer[](2);
+        EscrowBatch.BatchTransfer[] memory transfers = new EscrowBatch.BatchTransfer[](2);
         transfers[0] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
         transfers[1] = _erc20BatchTransfer(FEE_RECIPIENT, FEE_AMOUNT);
 
@@ -143,12 +142,12 @@ contract TempoTest is Test {
         transferIndexes[1] = 1;
 
         vm.prank(FROM_ADDRESS);
-        escrow.bond(transferIndexes, 250e18);
+        escrow.bid(transferIndexes, 250e18);
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
 
-        IEscrowBatch.BatchReceiptProof memory proof = IEscrowBatch.BatchReceiptProof({
+        EscrowBatch.BatchReceiptProof memory proof = EscrowBatch.BatchReceiptProof({
             blockHeader: BLOCK_HEADER,
             receiptRlp: RECEIPT_RLP,
             proofNodes: PROOF_NODES,
@@ -158,16 +157,16 @@ contract TempoTest is Test {
         uint256[] memory logIndexes = new uint256[](2);
         logIndexes[0] = 0;
         logIndexes[1] = 1;
-        IEscrowBatch.BatchProof[] memory proofs = new IEscrowBatch.BatchProof[](1);
+        EscrowBatch.BatchProof[] memory proofs = new EscrowBatch.BatchProof[](1);
         proofs[0] = _erc20BatchProof(proof, transferIndexes, logIndexes);
 
         vm.prank(FROM_ADDRESS);
         escrow.collect(proofs);
 
         assertFalse(escrow.funded());
-        assertEq(escrow.currentPaymentAmount(), 0);
+        assertEq(escrow.currentTransferAmount(), 0);
         assertEq(escrow.currentRewardAmount(), 0);
-        assertEq(escrow.activeReservationCount(), 0);
+        assertEq(escrow.activeBidCount(), 0);
         assertEq(escrow.completedTransferCount(), 2);
     }
 
@@ -178,7 +177,7 @@ contract TempoTest is Test {
         vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
         vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
 
-        IEscrowBatch.BatchTransfer[] memory transfers = new IEscrowBatch.BatchTransfer[](2);
+        EscrowBatch.BatchTransfer[] memory transfers = new EscrowBatch.BatchTransfer[](2);
         transfers[0] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
         transfers[1] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
 
@@ -190,12 +189,12 @@ contract TempoTest is Test {
         transferIndexes[1] = 1;
 
         vm.prank(FROM_ADDRESS);
-        escrow.bond(transferIndexes, 250e18);
+        escrow.bid(transferIndexes, 250e18);
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
 
-        IEscrowBatch.BatchReceiptProof memory proof = IEscrowBatch.BatchReceiptProof({
+        EscrowBatch.BatchReceiptProof memory proof = EscrowBatch.BatchReceiptProof({
             blockHeader: BLOCK_HEADER,
             receiptRlp: RECEIPT_RLP,
             proofNodes: PROOF_NODES,
@@ -210,7 +209,7 @@ contract TempoTest is Test {
         uint256[] memory reusedLogIndexes = new uint256[](1);
         reusedLogIndexes[0] = 0;
 
-        IEscrowBatch.BatchProof[] memory proofs = new IEscrowBatch.BatchProof[](2);
+        EscrowBatch.BatchProof[] memory proofs = new EscrowBatch.BatchProof[](2);
         proofs[0] = _erc20BatchProof(proof, firstTransferIndexes, reusedLogIndexes);
         proofs[1] = _erc20BatchProof(proof, secondTransferIndexes, reusedLogIndexes);
 
@@ -219,14 +218,14 @@ contract TempoTest is Test {
         escrow.collect(proofs);
     }
 
-    function testRejectsProofBeforeReservation() public {
+    function testRejectsProofBeforeBid() public {
         address deployer = makeAddr("deployer");
 
         vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
         vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
         vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
 
-        IEscrowBatch.BatchTransfer[] memory transfers = new IEscrowBatch.BatchTransfer[](1);
+        EscrowBatch.BatchTransfer[] memory transfers = new EscrowBatch.BatchTransfer[](1);
         transfers[0] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
 
         vm.prank(deployer);
@@ -239,9 +238,9 @@ contract TempoTest is Test {
         transferIndexes[0] = 0;
 
         vm.prank(FROM_ADDRESS);
-        escrow.bond(transferIndexes, 250e18);
+        escrow.bid(transferIndexes, 250e18);
 
-        IEscrowBatch.BatchReceiptProof memory proof = IEscrowBatch.BatchReceiptProof({
+        EscrowBatch.BatchReceiptProof memory proof = EscrowBatch.BatchReceiptProof({
             blockHeader: BLOCK_HEADER,
             receiptRlp: RECEIPT_RLP,
             proofNodes: PROOF_NODES,
@@ -250,35 +249,28 @@ contract TempoTest is Test {
         });
         uint256[] memory logIndexes = new uint256[](1);
         logIndexes[0] = 0;
-        IEscrowBatch.BatchProof[] memory proofs = new IEscrowBatch.BatchProof[](1);
+        EscrowBatch.BatchProof[] memory proofs = new EscrowBatch.BatchProof[](1);
         proofs[0] = _erc20BatchProof(proof, transferIndexes, logIndexes);
 
         vm.prank(FROM_ADDRESS);
-        vm.expectRevert(EscrowBatch.ProofBeforeReservation.selector);
+        vm.expectRevert(EscrowBatch.ProofBeforeBid.selector);
         escrow.collect(proofs);
     }
 
     function _erc20BatchTransfer(address recipient, uint256 amount)
         internal
         pure
-        returns (IEscrowBatch.BatchTransfer memory)
+        returns (EscrowBatch.BatchTransfer memory)
     {
-        return IEscrowBatch.BatchTransfer({
-            assetType: IEscrowBatch.AssetType.ERC20,
-            asset: TOKEN,
-            recipient: recipient,
-            amount: amount,
-            rewardWeight: amount
-        });
+        return EscrowBatch.BatchTransfer({asset: TOKEN, recipient: recipient, amount: amount});
     }
 
     function _erc20BatchProof(
-        IEscrowBatch.BatchReceiptProof memory receiptProof,
+        EscrowBatch.BatchReceiptProof memory receiptProof,
         uint256[] memory transferIndexes,
         uint256[] memory logIndexes
-    ) internal pure returns (IEscrowBatch.BatchProof memory) {
-        return IEscrowBatch.BatchProof({
-            proofType: IEscrowBatch.AssetType.ERC20,
+    ) internal pure returns (EscrowBatch.BatchProof memory) {
+        return EscrowBatch.BatchProof({
             receiptProof: receiptProof,
             transactionRlp: hex"",
             txProofNodes: hex"",
