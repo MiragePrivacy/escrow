@@ -2,7 +2,6 @@
 pragma solidity 0.8.30;
 
 import "./BlockHeaderParser.sol";
-import "./IEscrowBatch.sol";
 import "./MPTVerifier.sol";
 import "./ReceiptValidator.sol";
 
@@ -12,22 +11,70 @@ interface IBatchERC20 {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
 }
 
-contract EscrowBatch is IEscrowBatch {
+/// @title EscrowBatch
+/// @notice Multi-transfer escrow with first-come bid-backed execution. Bidders
+/// (nodes) commit to executing selected transfer rows by posting a
+/// bond. Bidders who prove every committed transfer by `expiresAt` recover
+/// their bond plus a pro-rata reward share. Expired bids forfeit their bond
+/// into the reward pool.
+contract EscrowBatch {
+    // ============ Types ============
+
+    /// TODO: reward calculation across mixed assets is not fully solved yet.
+    struct BatchTransfer {
+        address asset;
+        address recipient;
+        uint256 amount;
+    }
+
+    struct BatchReceiptProof {
+        bytes blockHeader;
+        bytes receiptRlp;
+        bytes proofNodes;
+        bytes receiptPath;
+        uint256 targetBlockNumber;
+    }
+
+    /// @dev Proof type is inferred from the asset of the first claimed transfer:
+    /// - if that transfer's `asset == address(0)`, the proof is native and
+    ///   `transferIndexes.length` must be 1 and `transactionRlp` / `txProofNodes` populated.
+    /// - otherwise it's an ERC-20 receipt-log proof; `logIndexes` must match
+    ///   `transferIndexes` in length and order.
+    struct BatchProof {
+        BatchReceiptProof receiptProof;
+        bytes transactionRlp;
+        bytes txProofNodes;
+        uint256[] transferIndexes;
+        uint256[] logIndexes;
+    }
+
+    /// @dev A bid is a bidder's commitment to deliver the transfer rows stored in
+    /// `bidTransferIndexes[bidder]`, backed by `bondAmount` as security deposit
+    /// and valid until `expiresAt`. `startBlock` is the block at which the bid
+    /// was placed, used to reject proofs of transfers that happened before the bid existed.
+    struct Bid {
+        uint256 bondAmount;
+        uint256 expiresAt;
+        uint256 startBlock;
+    }
+
+    // ============ Errors ============
+
     error OnlyDeployer();
     error NotFunded();
-    error OnlyBondedExecutor();
+    error OnlyActiveBidder();
     error TargetBlockInFuture();
     error TargetBlockTooOld();
     error BlockHashUnavailable();
     error BlockHeaderMismatch();
     error BlockNumberMismatch();
-    error BondActive();
+    error BidActive();
     error CancellationRequested();
-    error ExecutorAlreadyBonded();
+    error BidderHasActiveBid();
     error InsufficientBond();
     error ZeroAddress();
     error EmptyBatch();
-    error EmptyReservation();
+    error EmptyBid();
     error ZeroRewardAmount();
     error ZeroPaymentAmount();
     error AlreadyFunded();
@@ -38,57 +85,49 @@ contract EscrowBatch is IEscrowBatch {
     error DuplicateLogIndex();
     error DuplicateTransferIndex();
     error InvalidTransferIndex();
-    error InvalidProofType();
+    error InvalidProofShape();
     error InvalidTxProof();
     error TxFailed();
     error TransferAlreadyCompleted();
-    error TransferAlreadyReserved();
-    error TransferNotReserved();
+    error TransferAlreadyInBid();
+    error TransferNotInBid();
     error MissingTransferProof();
-    error ProofBeforeReservation();
+    error ProofBeforeBid();
     error InvalidReceiptProof();
     error InvalidTransferEvent();
     error InvalidNativeTransfer();
-    error NoWithdrawableFunds();
     error Reentrancy();
 
-    struct Reservation {
-        uint256 bondAmount;
-        uint256 deadline;
-        uint256 startBlock;
-        uint256 reservedRewardWeight;
-        uint256 reservedCount;
-    }
+    // ============ Storage ============
 
-    address immutable deployerAddress;
-    address public immutable tokenContract;
-    uint256 public immutable totalPaymentAmount;
-    uint256 public immutable totalRewardWeight;
+    address public immutable deployerAddress;
+    address public immutable rewardAsset;
+    uint256 public immutable totalTransferAmount;
 
     uint256 public currentRewardAmount;
-    uint256 public currentPaymentAmount;
+    uint256 public currentTransferAmount;
     uint256 public originalRewardAmount;
     uint256 public completedTransferCount;
-    uint256 public activeReservationCount;
-    uint256 public totalBondsDeposited;
+    uint256 public activeBidCount;
 
     uint256 public constant MAX_BLOCK_LOOKBACK = 256;
+    uint256 public constant BID_DURATION = 5 minutes;
     uint256 private constant NOT_ENTERED = 1;
     uint256 private constant ENTERED = 2;
 
-    IEscrowBatch.BatchTransfer[] public expectedTransfers;
+    BatchTransfer[] public expectedTransfers;
 
-    mapping(address => Reservation) public reservations;
-    mapping(address => uint256[]) private reservedTransferIndexes;
-    mapping(address => uint256) private reservationExecutorPositions;
-    address[] private reservationExecutors;
+    mapping(address => Bid) public bids;
+    mapping(address => uint256[]) private bidTransferIndexes;
+    mapping(address => uint256) private bidderPositions;
+    address[] private bidders;
 
     mapping(address => uint256) public totalAssetPaymentAmount;
     mapping(address => uint256) public currentAssetPaymentAmount;
     mapping(address => bool) private knownPaymentAsset;
     address[] private paymentAssets;
 
-    mapping(uint256 => address) public transferExecutor;
+    mapping(uint256 => address) public transferBidder;
     mapping(uint256 => bool) public transferCompleted;
 
     bool public cancellationRequest;
@@ -103,26 +142,20 @@ contract EscrowBatch is IEscrowBatch {
         reentrancyStatus = NOT_ENTERED;
     }
 
-    constructor(
-        address _tokenContract,
-        IEscrowBatch.BatchTransfer[] memory _expectedTransfers,
-        uint256 _currentRewardAmount
-    ) payable {
-        if (_tokenContract == address(0)) revert ZeroAddress();
+    constructor(address _rewardAsset, BatchTransfer[] memory _expectedTransfers, uint256 _currentRewardAmount) payable {
         if (_expectedTransfers.length == 0) revert EmptyBatch();
 
-        tokenContract = _tokenContract;
+        rewardAsset = _rewardAsset;
         deployerAddress = msg.sender;
 
-        uint256 totalWeight;
+        uint256 totalAmount;
         for (uint256 i = 0; i < _expectedTransfers.length;) {
-            IEscrowBatch.BatchTransfer memory expectedTransfer = _expectedTransfers[i];
+            BatchTransfer memory expectedTransfer = _expectedTransfers[i];
             _validateExpectedTransfer(expectedTransfer);
 
-            address asset = _assetKey(expectedTransfer);
-            _trackPaymentAsset(asset);
-            totalAssetPaymentAmount[asset] += expectedTransfer.amount;
-            totalWeight += expectedTransfer.rewardWeight;
+            _trackPaymentAsset(expectedTransfer.asset);
+            totalAssetPaymentAmount[expectedTransfer.asset] += expectedTransfer.amount;
+            totalAmount += expectedTransfer.amount;
             expectedTransfers.push(expectedTransfer);
 
             unchecked {
@@ -130,8 +163,7 @@ contract EscrowBatch is IEscrowBatch {
             }
         }
 
-        totalPaymentAmount = totalWeight;
-        totalRewardWeight = totalWeight;
+        totalTransferAmount = totalAmount;
 
         if (_currentRewardAmount > 0) {
             _fund(_currentRewardAmount);
@@ -139,6 +171,8 @@ contract EscrowBatch is IEscrowBatch {
             revert IncorrectNativeAmount();
         }
     }
+
+    // ============ View functions ============
 
     function expectedTransferCount() external view returns (uint256) {
         return expectedTransfers.length;
@@ -152,17 +186,36 @@ contract EscrowBatch is IEscrowBatch {
         return paymentAssets[index];
     }
 
-    function reservedTransferCount(address executor) external view returns (uint256) {
-        return reservedTransferIndexes[executor].length;
+    function bidTransferCount(address bidder) external view returns (uint256) {
+        return bidTransferIndexes[bidder].length;
     }
 
-    function reservedTransferIndex(address executor, uint256 position) external view returns (uint256) {
-        return reservedTransferIndexes[executor][position];
+    function bidTransferIndex(address bidder, uint256 position) external view returns (uint256) {
+        return bidTransferIndexes[bidder][position];
     }
+
+    function is_bonded() public view returns (bool) {
+        uint256 bidderCount = bidders.length;
+        for (uint256 i = 0; i < bidderCount;) {
+            Bid storage activeBid = bids[bidders[i]];
+            if (activeBid.expiresAt > 0 && block.timestamp <= activeBid.expiresAt) {
+                return true;
+            }
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        return false;
+    }
+
+    // ============ Deployer entrypoints ============
 
     function fund(uint256 _currentRewardAmount) external payable nonReentrant {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (funded || hasBeenFunded) revert AlreadyFunded();
+        if (cancellationRequest) revert CancellationRequested();
 
         _fund(_currentRewardAmount);
     }
@@ -177,130 +230,24 @@ contract EscrowBatch is IEscrowBatch {
         cancellationRequest = false;
     }
 
-    function is_bonded() public view returns (bool) {
-        uint256 executorCount = reservationExecutors.length;
-        for (uint256 i = 0; i < executorCount;) {
-            Reservation storage reservation = reservations[reservationExecutors[i]];
-            if (reservation.deadline > 0 && block.timestamp <= reservation.deadline) {
-                return true;
-            }
-
-            unchecked {
-                ++i;
-            }
-        }
-
-        return false;
-    }
-
-    function bond(uint256[] calldata transferIndexes, uint256 _bondAmount) external nonReentrant {
-        _handleExpiredReservations(true);
-        _validateBondRequirements(transferIndexes, _bondAmount);
-
-        (uint256 reservedRewardWeight, uint256 reservedCount) = _validateReservationIndexes(transferIndexes);
-        uint256 requiredBond = _calculateRewardShare(reservedRewardWeight) / 2;
-        if (_bondAmount < requiredBond) revert InsufficientBond();
-
-        _trackReservationExecutor(msg.sender);
-
-        Reservation storage reservation = reservations[msg.sender];
-        reservation.bondAmount = _bondAmount;
-        reservation.deadline = block.timestamp + 5 minutes;
-        reservation.startBlock = block.number;
-        reservation.reservedRewardWeight = reservedRewardWeight;
-        reservation.reservedCount = reservedCount;
-        activeReservationCount += 1;
-
-        for (uint256 i = 0; i < transferIndexes.length;) {
-            uint256 transferIndex = transferIndexes[i];
-            transferExecutor[transferIndex] = msg.sender;
-            reservedTransferIndexes[msg.sender].push(transferIndex);
-
-            unchecked {
-                ++i;
-            }
-        }
-
-        if (!IBatchERC20(tokenContract).transferFrom(msg.sender, address(this), _bondAmount)) {
-            revert TokenTransferFailed();
-        }
-    }
-
-    function collect(IEscrowBatch.BatchProof[] calldata proofs) external nonReentrant {
-        _handleExpiredReservations(true);
-
-        Reservation storage reservation = reservations[msg.sender];
-        if (!funded) revert NotFunded();
-        if (reservation.deadline == 0 || block.timestamp > reservation.deadline) revert OnlyBondedExecutor();
-        if (proofs.length == 0) revert InvalidBatchProofLength();
-
-        bool[] memory seenTransfers = new bool[](expectedTransfers.length);
-        bytes32[] memory seenProofItems = new bytes32[](expectedTransfers.length);
-        uint256 completedRewardWeight;
-        uint256 providedTransferCount;
-
-        for (uint256 proofIndex = 0; proofIndex < proofs.length;) {
-            IEscrowBatch.BatchProof calldata batchProof = proofs[proofIndex];
-
-            if (batchProof.proofType == IEscrowBatch.AssetType.ERC20) {
-                (uint256 proofRewardWeight, uint256 proofTransferCount) = _validateERC20BatchProof(
-                    batchProof, seenTransfers, seenProofItems, providedTransferCount, reservation.startBlock
-                );
-                completedRewardWeight += proofRewardWeight;
-                providedTransferCount += proofTransferCount;
-            } else if (batchProof.proofType == IEscrowBatch.AssetType.NATIVE) {
-                uint256 transferIndex = _validateNativeBatchProof(
-                    batchProof, seenTransfers, seenProofItems, providedTransferCount, reservation.startBlock
-                );
-                completedRewardWeight += expectedTransfers[transferIndex].rewardWeight;
-                providedTransferCount += 1;
-            } else {
-                revert InvalidProofType();
-            }
-
-            unchecked {
-                ++proofIndex;
-            }
-        }
-
-        if (providedTransferCount != reservation.reservedCount) revert MissingTransferProof();
-        if (completedRewardWeight != reservation.reservedRewardWeight) revert MissingTransferProof();
-
-        uint256[] storage reservedIndexes = reservedTransferIndexes[msg.sender];
-        for (uint256 i = 0; i < reservedIndexes.length;) {
-            uint256 transferIndex = reservedIndexes[i];
-            if (!seenTransfers[transferIndex]) revert MissingTransferProof();
-            transferCompleted[transferIndex] = true;
-            transferExecutor[transferIndex] = address(0);
-
-            unchecked {
-                ++i;
-            }
-        }
-
-        _payoutReservation(msg.sender, reservation.bondAmount, completedRewardWeight, reservation.reservedCount);
-    }
-
     function cancelAndWithdraw() external nonReentrant {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (!funded) revert NotFunded();
 
         cancellationRequest = true;
-        _handleExpiredReservations(true);
-        if (activeReservationCount > 0) revert BondActive();
+        _handleExpiredBids();
+        if (activeBidCount > 0) revert BidActive();
 
         uint256 rewardAmount = currentRewardAmount;
         address[] memory assets = paymentAssets;
         uint256[] memory amounts = new uint256[](assets.length);
-        uint256 withdrawableAmount = rewardAmount;
 
         funded = false;
         currentRewardAmount = 0;
-        currentPaymentAmount = 0;
+        currentTransferAmount = 0;
 
         for (uint256 i = 0; i < assets.length;) {
             amounts[i] = currentAssetPaymentAmount[assets[i]];
-            withdrawableAmount += amounts[i];
             currentAssetPaymentAmount[assets[i]] = 0;
 
             unchecked {
@@ -308,10 +255,8 @@ contract EscrowBatch is IEscrowBatch {
             }
         }
 
-        if (withdrawableAmount == 0) revert NoWithdrawableFunds();
-
         if (rewardAmount > 0) {
-            _sendERC20(tokenContract, msg.sender, rewardAmount);
+            _sendAsset(rewardAsset, msg.sender, rewardAmount);
         }
         for (uint256 i = 0; i < assets.length;) {
             if (amounts[i] > 0) {
@@ -324,19 +269,130 @@ contract EscrowBatch is IEscrowBatch {
         }
     }
 
+    // ============ Bidder entrypoints ============
+
+    /// @notice Place a bid on a subset of expected transfers by posting a bond.
+    /// @dev Bids are first-come commitments, not price auctions. `_bondAmount`
+    /// is a security deposit; posting more than the required bond does not
+    /// give priority and cannot outbid an existing active bid.
+    /// `transferIndexes` is a list, so a single bid can reserve many rows in one call.
+    function bid(uint256[] calldata transferIndexes, uint256 _bondAmount) external payable nonReentrant {
+        _handleExpiredBids();
+        _validateBidRequirements(transferIndexes, _bondAmount);
+
+        uint256 transferAmount = _validateBidIndexes(transferIndexes);
+        uint256 requiredBond = _calculateRewardShare(transferAmount) / 2;
+        if (_bondAmount < requiredBond) revert InsufficientBond();
+
+        _trackBidder(msg.sender);
+
+        Bid storage placedBid = bids[msg.sender];
+        placedBid.bondAmount = _bondAmount;
+        placedBid.expiresAt = block.timestamp + BID_DURATION;
+        placedBid.startBlock = block.number;
+        activeBidCount += 1;
+
+        for (uint256 i = 0; i < transferIndexes.length;) {
+            uint256 transferIndex = transferIndexes[i];
+            transferBidder[transferIndex] = msg.sender;
+            bidTransferIndexes[msg.sender].push(transferIndex);
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        if (rewardAsset == address(0)) {
+            if (msg.value != _bondAmount) revert IncorrectNativeAmount();
+        } else {
+            if (msg.value != 0) revert IncorrectNativeAmount();
+            if (!IBatchERC20(rewardAsset).transferFrom(msg.sender, address(this), _bondAmount)) {
+                revert TokenTransferFailed();
+            }
+        }
+    }
+
+    /// @notice Settle the caller's active bid by submitting proofs of every transfer
+    /// they committed to. Pays out the bond + a pro-rata reward share + per-asset
+    /// reimbursements on success; reverts if any committed transfer is unproven.
+    function collect(BatchProof[] calldata proofs) external nonReentrant {
+        _handleExpiredBids();
+
+        Bid storage activeBid = bids[msg.sender];
+        if (!funded) revert NotFunded();
+        if (activeBid.expiresAt == 0 || block.timestamp > activeBid.expiresAt) revert OnlyActiveBidder();
+        if (proofs.length == 0) revert InvalidBatchProofLength();
+
+        bool[] memory seenTransfers = new bool[](expectedTransfers.length);
+        bytes32[] memory seenProofItems = new bytes32[](expectedTransfers.length);
+        uint256 providedTransferCount;
+
+        for (uint256 proofIndex = 0; proofIndex < proofs.length;) {
+            BatchProof calldata batchProof = proofs[proofIndex];
+            if (batchProof.transferIndexes.length == 0) revert InvalidBatchProofLength();
+
+            uint256 firstTransferIndex = batchProof.transferIndexes[0];
+            if (firstTransferIndex >= expectedTransfers.length) revert InvalidTransferIndex();
+
+            address firstAsset = expectedTransfers[firstTransferIndex].asset;
+            if (firstAsset == address(0)) {
+                _validateNativeBatchProof(
+                    batchProof, seenTransfers, seenProofItems, providedTransferCount, activeBid.startBlock
+                );
+                providedTransferCount += 1;
+            } else {
+                uint256 proofTransferCount = _validateERC20BatchProof(
+                    batchProof, seenTransfers, seenProofItems, providedTransferCount, activeBid.startBlock
+                );
+                providedTransferCount += proofTransferCount;
+            }
+
+            unchecked {
+                ++proofIndex;
+            }
+        }
+
+        uint256[] storage committedIndexes = bidTransferIndexes[msg.sender];
+        if (providedTransferCount != committedIndexes.length) revert MissingTransferProof();
+
+        for (uint256 i = 0; i < committedIndexes.length;) {
+            uint256 transferIndex = committedIndexes[i];
+            if (!seenTransfers[transferIndex]) revert MissingTransferProof();
+            transferCompleted[transferIndex] = true;
+            transferBidder[transferIndex] = address(0);
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        _payoutBid(msg.sender, activeBid.bondAmount);
+    }
+
+    // ============ Internal: funding ============
+
     function _fund(uint256 _currentRewardAmount) internal {
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
-        if (totalRewardWeight == 0) revert ZeroPaymentAmount();
-        if (msg.value != totalAssetPaymentAmount[address(0)]) revert IncorrectNativeAmount();
+
+        // msg.value must cover any native transfers in the batch plus, if the
+        // bond/reward currency is ETH, the reward amount itself.
+        uint256 nativeOwed = totalAssetPaymentAmount[address(0)];
+        if (rewardAsset == address(0)) {
+            nativeOwed += _currentRewardAmount;
+        }
+        if (msg.value != nativeOwed) revert IncorrectNativeAmount();
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
-        currentPaymentAmount = totalRewardWeight;
+        currentTransferAmount = totalTransferAmount;
         completedTransferCount = 0;
         hasBeenFunded = true;
         funded = true;
 
-        if (!IBatchERC20(tokenContract).transferFrom(msg.sender, address(this), _currentRewardAmount)) {
+        if (
+            rewardAsset != address(0)
+                && !IBatchERC20(rewardAsset).transferFrom(msg.sender, address(this), _currentRewardAmount)
+        ) {
             revert TokenTransferFailed();
         }
 
@@ -355,33 +411,22 @@ contract EscrowBatch is IEscrowBatch {
         }
     }
 
-    function _validateExpectedTransfer(IEscrowBatch.BatchTransfer memory expectedTransfer) internal pure {
+    // ============ Internal: validation ============
+
+    function _validateExpectedTransfer(BatchTransfer memory expectedTransfer) internal pure {
         if (expectedTransfer.recipient == address(0)) revert ZeroAddress();
         if (expectedTransfer.amount == 0) revert ZeroPaymentAmount();
-        if (expectedTransfer.rewardWeight == 0) revert ZeroPaymentAmount();
-
-        if (expectedTransfer.assetType == IEscrowBatch.AssetType.ERC20) {
-            if (expectedTransfer.asset == address(0)) revert ZeroAddress();
-        } else if (expectedTransfer.assetType == IEscrowBatch.AssetType.NATIVE) {
-            if (expectedTransfer.asset != address(0)) revert ZeroAddress();
-        } else {
-            revert InvalidProofType();
-        }
     }
 
-    function _validateBondRequirements(uint256[] calldata transferIndexes, uint256 _bondAmount) internal view {
+    function _validateBidRequirements(uint256[] calldata transferIndexes, uint256 _bondAmount) internal view {
         if (!funded) revert NotFunded();
         if (cancellationRequest) revert CancellationRequested();
-        if (transferIndexes.length == 0) revert EmptyReservation();
-        if (reservations[msg.sender].deadline > 0) revert ExecutorAlreadyBonded();
+        if (transferIndexes.length == 0) revert EmptyBid();
+        if (bids[msg.sender].expiresAt > 0) revert BidderHasActiveBid();
         if (_bondAmount == 0) revert InsufficientBond();
     }
 
-    function _validateReservationIndexes(uint256[] calldata transferIndexes)
-        internal
-        view
-        returns (uint256 reservedRewardWeight, uint256 reservedCount)
-    {
+    function _validateBidIndexes(uint256[] calldata transferIndexes) internal view returns (uint256 transferAmount) {
         bool[] memory seenTransfers = new bool[](expectedTransfers.length);
 
         for (uint256 i = 0; i < transferIndexes.length;) {
@@ -389,11 +434,10 @@ contract EscrowBatch is IEscrowBatch {
             if (transferIndex >= expectedTransfers.length) revert InvalidTransferIndex();
             if (seenTransfers[transferIndex]) revert DuplicateTransferIndex();
             if (transferCompleted[transferIndex]) revert TransferAlreadyCompleted();
-            if (transferExecutor[transferIndex] != address(0)) revert TransferAlreadyReserved();
+            if (transferBidder[transferIndex] != address(0)) revert TransferAlreadyInBid();
 
             seenTransfers[transferIndex] = true;
-            reservedRewardWeight += expectedTransfers[transferIndex].rewardWeight;
-            reservedCount += 1;
+            transferAmount += expectedTransfers[transferIndex].amount;
 
             unchecked {
                 ++i;
@@ -402,24 +446,25 @@ contract EscrowBatch is IEscrowBatch {
     }
 
     function _validateERC20BatchProof(
-        IEscrowBatch.BatchProof calldata batchProof,
+        BatchProof calldata batchProof,
         bool[] memory seenTransfers,
         bytes32[] memory seenProofItems,
         uint256 providedTransferCount,
-        uint256 reservationStartBlock
-    ) internal view returns (uint256 proofRewardWeight, uint256 proofTransferCount) {
-        if (batchProof.transferIndexes.length == 0) revert InvalidBatchProofLength();
-        if (batchProof.transferIndexes.length != batchProof.logIndexes.length) revert InvalidBatchProofLength();
+        uint256 bidStartBlock
+    ) internal view returns (uint256 proofTransferCount) {
+        if (batchProof.transferIndexes.length != batchProof.logIndexes.length) {
+            revert InvalidBatchProofLength();
+        }
         _validateLogIndexesAreUnique(batchProof.logIndexes);
 
         for (uint256 i = 0; i < batchProof.transferIndexes.length;) {
             uint256 transferIndex = _validateCollectTransfer(batchProof.transferIndexes[i], seenTransfers);
-            IEscrowBatch.BatchTransfer storage expectedTransfer = expectedTransfers[transferIndex];
-            if (expectedTransfer.assetType != IEscrowBatch.AssetType.ERC20) revert InvalidProofType();
+            BatchTransfer storage expectedTransfer = expectedTransfers[transferIndex];
+            if (expectedTransfer.asset == address(0)) revert InvalidProofShape();
 
             bytes32 proofItemId = keccak256(
                 abi.encode(
-                    batchProof.proofType,
+                    uint8(1), // ERC20 proof tag
                     batchProof.receiptProof.targetBlockNumber,
                     batchProof.receiptProof.receiptPath,
                     batchProof.logIndexes[i]
@@ -429,7 +474,6 @@ contract EscrowBatch is IEscrowBatch {
             seenProofItems[providedTransferCount + proofTransferCount] = proofItemId;
 
             seenTransfers[transferIndex] = true;
-            proofRewardWeight += expectedTransfer.rewardWeight;
             proofTransferCount += 1;
 
             unchecked {
@@ -437,12 +481,12 @@ contract EscrowBatch is IEscrowBatch {
             }
         }
 
-        if (batchProof.receiptProof.targetBlockNumber <= reservationStartBlock) revert ProofBeforeReservation();
+        if (batchProof.receiptProof.targetBlockNumber <= bidStartBlock) revert ProofBeforeBid();
         _validateReceiptProof(batchProof.receiptProof);
 
         for (uint256 i = 0; i < batchProof.transferIndexes.length;) {
             uint256 transferIndex = batchProof.transferIndexes[i];
-            IEscrowBatch.BatchTransfer storage expectedTransfer = expectedTransfers[transferIndex];
+            BatchTransfer storage expectedTransfer = expectedTransfers[transferIndex];
             if (!ReceiptValidator.validateTransferInReceipt(
                     batchProof.receiptProof.receiptRlp,
                     batchProof.logIndexes[i],
@@ -458,30 +502,32 @@ contract EscrowBatch is IEscrowBatch {
     }
 
     function _validateNativeBatchProof(
-        IEscrowBatch.BatchProof calldata batchProof,
+        BatchProof calldata batchProof,
         bool[] memory seenTransfers,
         bytes32[] memory seenProofItems,
         uint256 providedTransferCount,
-        uint256 reservationStartBlock
+        uint256 bidStartBlock
     ) internal view returns (uint256 transferIndex) {
         if (batchProof.transferIndexes.length != 1 || batchProof.logIndexes.length != 0) {
             revert InvalidBatchProofLength();
         }
 
         transferIndex = _validateCollectTransfer(batchProof.transferIndexes[0], seenTransfers);
-        IEscrowBatch.BatchTransfer storage expectedTransfer = expectedTransfers[transferIndex];
-        if (expectedTransfer.assetType != IEscrowBatch.AssetType.NATIVE) revert InvalidProofType();
+        BatchTransfer storage expectedTransfer = expectedTransfers[transferIndex];
+        if (expectedTransfer.asset != address(0)) revert InvalidProofShape();
 
         bytes32 proofItemId = keccak256(
             abi.encode(
-                batchProof.proofType, batchProof.receiptProof.targetBlockNumber, batchProof.receiptProof.receiptPath
+                uint8(0), // native proof tag
+                batchProof.receiptProof.targetBlockNumber,
+                batchProof.receiptProof.receiptPath
             )
         );
         _validateProofItemIsUnused(seenProofItems, providedTransferCount, proofItemId);
         seenProofItems[providedTransferCount] = proofItemId;
         seenTransfers[transferIndex] = true;
 
-        if (batchProof.receiptProof.targetBlockNumber <= reservationStartBlock) revert ProofBeforeReservation();
+        if (batchProof.receiptProof.targetBlockNumber <= bidStartBlock) revert ProofBeforeBid();
         _validateNativeProof(batchProof, expectedTransfer.recipient, expectedTransfer.amount);
     }
 
@@ -492,12 +538,11 @@ contract EscrowBatch is IEscrowBatch {
     {
         if (transferIndex >= expectedTransfers.length) revert InvalidTransferIndex();
         if (seenTransfers[transferIndex]) revert DuplicateTransferIndex();
-        if (transferExecutor[transferIndex] != msg.sender) revert TransferNotReserved();
-        if (transferCompleted[transferIndex]) revert TransferAlreadyCompleted();
+        if (transferBidder[transferIndex] != msg.sender) revert TransferNotInBid();
         return transferIndex;
     }
 
-    function _validateReceiptProof(IEscrowBatch.BatchReceiptProof calldata proof) internal view {
+    function _validateReceiptProof(BatchReceiptProof calldata proof) internal view {
         _validateBlockHeader(proof.blockHeader, proof.targetBlockNumber);
 
         bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(proof.blockHeader);
@@ -506,11 +551,10 @@ contract EscrowBatch is IEscrowBatch {
         }
     }
 
-    function _validateNativeProof(
-        IEscrowBatch.BatchProof calldata batchProof,
-        address expectedRecipient,
-        uint256 expectedAmount
-    ) internal view {
+    function _validateNativeProof(BatchProof calldata batchProof, address expectedRecipient, uint256 expectedAmount)
+        internal
+        view
+    {
         _validateBlockHeader(batchProof.receiptProof.blockHeader, batchProof.receiptProof.targetBlockNumber);
 
         bytes32 transactionsRoot = BlockHeaderParser.extractTransactionsRoot(batchProof.receiptProof.blockHeader);
@@ -574,10 +618,12 @@ contract EscrowBatch is IEscrowBatch {
         }
     }
 
-    function _handleExpiredReservations(bool addToReward) internal {
+    // ============ Internal: bid lifecycle ============
+
+    function _handleExpiredBids() internal {
         uint256 i;
-        while (i < reservationExecutors.length) {
-            if (!_releaseExpiredReservation(reservationExecutors[i], addToReward)) {
+        while (i < bidders.length) {
+            if (!_releaseExpiredBid(bidders[i])) {
                 unchecked {
                     ++i;
                 }
@@ -585,34 +631,33 @@ contract EscrowBatch is IEscrowBatch {
         }
     }
 
-    function _releaseExpiredReservation(address executor, bool addToReward) internal returns (bool released) {
-        Reservation storage reservation = reservations[executor];
-        if (reservation.deadline == 0 || block.timestamp <= reservation.deadline) {
+    function _releaseExpiredBid(address bidder) internal returns (bool released) {
+        Bid storage activeBid = bids[bidder];
+        if (activeBid.expiresAt == 0 || block.timestamp <= activeBid.expiresAt) {
             return false;
         }
 
-        uint256 forfeitedBond = reservation.bondAmount;
-        _clearReservation(executor);
+        uint256 forfeitedBond = activeBid.bondAmount;
+        _clearBid(bidder);
 
-        if (addToReward && forfeitedBond > 0) {
+        if (forfeitedBond > 0) {
             currentRewardAmount += forfeitedBond;
-            totalBondsDeposited += forfeitedBond;
         }
 
         return true;
     }
 
-    function _clearReservation(address executor) internal {
-        Reservation storage reservation = reservations[executor];
-        if (reservation.deadline == 0) {
+    function _clearBid(address bidder) internal {
+        Bid storage activeBid = bids[bidder];
+        if (activeBid.expiresAt == 0) {
             return;
         }
 
-        uint256[] storage indexes = reservedTransferIndexes[executor];
+        uint256[] storage indexes = bidTransferIndexes[bidder];
         for (uint256 i = 0; i < indexes.length;) {
             uint256 transferIndex = indexes[i];
-            if (transferExecutor[transferIndex] == executor) {
-                transferExecutor[transferIndex] = address(0);
+            if (transferBidder[transferIndex] == bidder) {
+                transferBidder[transferIndex] = address(0);
             }
 
             unchecked {
@@ -620,38 +665,38 @@ contract EscrowBatch is IEscrowBatch {
             }
         }
 
-        delete reservedTransferIndexes[executor];
-        delete reservations[executor];
-        _untrackReservationExecutor(executor);
-        activeReservationCount -= 1;
+        delete bidTransferIndexes[bidder];
+        delete bids[bidder];
+        _untrackBidder(bidder);
+        activeBidCount -= 1;
     }
 
-    function _trackReservationExecutor(address executor) internal {
-        if (reservationExecutorPositions[executor] != 0) {
+    function _trackBidder(address bidder) internal {
+        if (bidderPositions[bidder] != 0) {
             return;
         }
 
-        reservationExecutors.push(executor);
-        reservationExecutorPositions[executor] = reservationExecutors.length;
+        bidders.push(bidder);
+        bidderPositions[bidder] = bidders.length;
     }
 
-    function _untrackReservationExecutor(address executor) internal {
-        uint256 position = reservationExecutorPositions[executor];
+    function _untrackBidder(address bidder) internal {
+        uint256 position = bidderPositions[bidder];
         if (position == 0) {
             return;
         }
 
         uint256 index = position - 1;
-        uint256 lastIndex = reservationExecutors.length - 1;
+        uint256 lastIndex = bidders.length - 1;
 
         if (index != lastIndex) {
-            address lastExecutor = reservationExecutors[lastIndex];
-            reservationExecutors[index] = lastExecutor;
-            reservationExecutorPositions[lastExecutor] = position;
+            address lastBidder = bidders[lastIndex];
+            bidders[index] = lastBidder;
+            bidderPositions[lastBidder] = position;
         }
 
-        reservationExecutors.pop();
-        delete reservationExecutorPositions[executor];
+        bidders.pop();
+        delete bidderPositions[bidder];
     }
 
     function _trackPaymentAsset(address asset) internal {
@@ -663,64 +708,59 @@ contract EscrowBatch is IEscrowBatch {
         paymentAssets.push(asset);
     }
 
-    function _assetKey(IEscrowBatch.BatchTransfer memory expectedTransfer) internal pure returns (address) {
-        return expectedTransfer.assetType == IEscrowBatch.AssetType.NATIVE ? address(0) : expectedTransfer.asset;
-    }
+    // ============ Internal: reward math + payout ============
 
-    function _calculateRewardShare(uint256 rewardWeight) internal view returns (uint256) {
-        if (rewardWeight == 0 || currentRewardAmount == 0) {
+    /// @dev `currentReward × completedAmount / currentTransferAmount`.
+    function _calculateRewardShare(uint256 amount) internal view returns (uint256) {
+        if (amount == 0 || currentRewardAmount == 0) {
             return 0;
         }
-        if (rewardWeight >= currentPaymentAmount) {
+        if (amount >= currentTransferAmount) {
             return currentRewardAmount;
         }
 
-        return (currentRewardAmount * rewardWeight) / currentPaymentAmount;
+        return (currentRewardAmount * amount) / currentTransferAmount;
     }
 
-    function _payoutReservation(
-        address executor,
-        uint256 executorBondAmount,
-        uint256 completedRewardWeight,
-        uint256 completedCount
-    ) internal {
-        bool isFinalCollection =
-            completedTransferCount + completedCount == expectedTransfers.length;
-        uint256 rewardWeightShare = isFinalCollection ? currentPaymentAmount : completedRewardWeight;
-        uint256 rewardShare = isFinalCollection ? currentRewardAmount : _calculateRewardShare(completedRewardWeight);
+    function _payoutBid(address bidder, uint256 bidderBondAmount) internal {
+        uint256[] storage indexes = bidTransferIndexes[bidder];
+        uint256 completedCount = indexes.length;
+        bool isFinalCollection = completedTransferCount + completedCount == expectedTransfers.length;
 
-        uint256[] storage indexes = reservedTransferIndexes[executor];
         address[] memory assets = new address[](indexes.length);
         uint256[] memory amounts = new uint256[](indexes.length);
+        uint256 completedAmount;
         for (uint256 i = 0; i < indexes.length;) {
-            IEscrowBatch.BatchTransfer storage expectedTransfer = expectedTransfers[indexes[i]];
-            address asset = _assetKey(expectedTransfer);
-            assets[i] = asset;
+            BatchTransfer storage expectedTransfer = expectedTransfers[indexes[i]];
+            assets[i] = expectedTransfer.asset;
             amounts[i] = expectedTransfer.amount;
-            currentAssetPaymentAmount[asset] -= expectedTransfer.amount;
+            completedAmount += expectedTransfer.amount;
+            currentAssetPaymentAmount[expectedTransfer.asset] -= expectedTransfer.amount;
 
             unchecked {
                 ++i;
             }
         }
 
-        uint256 rewardPayout = executorBondAmount + rewardShare;
+        uint256 transferAmountShare = isFinalCollection ? currentTransferAmount : completedAmount;
+        uint256 rewardShare = isFinalCollection ? currentRewardAmount : _calculateRewardShare(completedAmount);
+        uint256 rewardPayout = bidderBondAmount + rewardShare;
         completedTransferCount += completedCount;
-        currentPaymentAmount -= rewardWeightShare;
+        currentTransferAmount -= transferAmountShare;
         currentRewardAmount -= rewardShare;
-        _clearReservation(executor);
+        _clearBid(bidder);
 
         if (isFinalCollection) {
             funded = false;
-            currentPaymentAmount = 0;
+            currentTransferAmount = 0;
             currentRewardAmount = 0;
         }
 
         if (rewardPayout > 0) {
-            _sendERC20(tokenContract, executor, rewardPayout);
+            _sendAsset(rewardAsset, bidder, rewardPayout);
         }
         for (uint256 i = 0; i < assets.length;) {
-            _sendAsset(assets[i], executor, amounts[i]);
+            _sendAsset(assets[i], bidder, amounts[i]);
 
             unchecked {
                 ++i;
