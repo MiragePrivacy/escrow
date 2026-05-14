@@ -455,8 +455,6 @@ contract EscrowBatch {
         if (batchProof.transferIndexes.length != batchProof.logIndexes.length) {
             revert InvalidBatchProofLength();
         }
-        _validateLogIndexesAreUnique(batchProof.logIndexes);
-
         for (uint256 i = 0; i < batchProof.transferIndexes.length;) {
             uint256 transferIndex = _validateCollectTransfer(batchProof.transferIndexes[i], seenTransfers);
             BatchTransfer storage expectedTransfer = expectedTransfers[transferIndex];
@@ -587,22 +585,6 @@ contract EscrowBatch {
         if (targetBlockHash == bytes32(0)) revert BlockHashUnavailable();
         if (keccak256(blockHeader) != targetBlockHash) revert BlockHeaderMismatch();
         if (BlockHeaderParser.extractBlockNumber(blockHeader) != targetBlockNumber) revert BlockNumberMismatch();
-    }
-
-    function _validateLogIndexesAreUnique(uint256[] calldata logIndexes) internal pure {
-        uint256 len = logIndexes.length;
-        for (uint256 i = 0; i < len;) {
-            uint256 current = logIndexes[i];
-            for (uint256 j = 0; j < i;) {
-                if (current == logIndexes[j]) revert DuplicateLogIndex();
-                unchecked {
-                    ++j;
-                }
-            }
-            unchecked {
-                ++i;
-            }
-        }
     }
 
     function _validateProofItemIsUnused(bytes32[] memory seenProofItems, uint256 seenCount, bytes32 proofItemId)
