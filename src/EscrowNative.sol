@@ -27,11 +27,12 @@ contract EscrowNative is EscrowBase {
     }
 
     constructor(
+        address _deployer,
         address _expectedRecipient,
         uint256 _expectedAmount,
         uint256 _currentRewardAmount,
         uint256 _currentPaymentAmount
-    ) payable EscrowBase(_expectedRecipient, _expectedAmount) {
+    ) payable EscrowBase(_deployer, _expectedRecipient, _expectedAmount) {
         if (_currentRewardAmount > 0 && _currentPaymentAmount > 0) {
             if (msg.value != _currentRewardAmount + _currentPaymentAmount) revert IncorrectETHAmount();
             currentRewardAmount = _currentRewardAmount;

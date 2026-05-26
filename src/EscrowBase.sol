@@ -19,9 +19,10 @@ abstract contract EscrowBase {
     error CancellationRequested();
     error ExecutorAlreadyBonded();
     error InsufficientBond();
+    error ZeroDeployer();
 
     // The following variables are set up in the constructor.
-    address immutable deployerAddress;
+    address public immutable deployerAddress;
     uint256 public currentRewardAmount;
     uint256 public currentPaymentAmount;
     uint256 public originalRewardAmount;
@@ -39,10 +40,11 @@ abstract contract EscrowBase {
     bool public cancellationRequest;
     bool public funded; // marks if the contract has funds to pay out the executors or not (if it doesn't have funds, no executor should be accepted)
 
-    constructor(address _expectedRecipient, uint256 _expectedAmount) {
+    constructor(address _deployer, address _expectedRecipient, uint256 _expectedAmount) {
+        if (_deployer == address(0)) revert ZeroDeployer();
+        deployerAddress = _deployer;
         expectedRecipient = _expectedRecipient;
         expectedAmount = _expectedAmount;
-        deployerAddress = msg.sender;
     }
 
     // only deployer can call this. will set the cancellation request to true.

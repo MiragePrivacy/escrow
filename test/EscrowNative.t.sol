@@ -32,7 +32,7 @@ contract EscrowNativeTest is Test {
         // Deploy escrow with native ETH funding in constructor
         vm.prank(deployer);
         escrow = new EscrowNative{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(
-            recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT
+            deployer, recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT
         );
     }
 
@@ -50,21 +50,21 @@ contract EscrowNativeTest is Test {
         vm.prank(deployer);
         vm.expectRevert(EscrowNative.IncorrectETHAmount.selector);
         new EscrowNative{value: 0.5 ether}( // Wrong amount - should be 1 ether
-            recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT
+            deployer, recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT
         );
     }
 
     function testConstructorNativeZeroValueWithAmounts() public {
         vm.prank(deployer);
         vm.expectRevert(EscrowNative.IncorrectETHAmount.selector);
-        new EscrowNative{value: 0}(recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
+        new EscrowNative{value: 0}(deployer, recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
     }
 
     function testFundNative() public {
         vm.startPrank(deployer);
 
         // Create unfunded escrow
-        EscrowNative escrow2 = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowNative escrow2 = new EscrowNative(deployer, recipient, EXPECTED_AMOUNT, 0, 0);
 
         // Fund it separately
         escrow2.fund{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
@@ -79,7 +79,7 @@ contract EscrowNativeTest is Test {
 
     function testFundNativeZeroReward() public {
         vm.startPrank(deployer);
-        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowNative unfundedEscrow = new EscrowNative(deployer, recipient, EXPECTED_AMOUNT, 0, 0);
 
         vm.expectRevert(EscrowNative.ZeroRewardAmount.selector);
         unfundedEscrow.fund{value: PAYMENT_AMOUNT}(0, PAYMENT_AMOUNT);
@@ -88,7 +88,7 @@ contract EscrowNativeTest is Test {
 
     function testFundNativeOnlyDeployer() public {
         vm.prank(deployer);
-        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowNative unfundedEscrow = new EscrowNative(deployer, recipient, EXPECTED_AMOUNT, 0, 0);
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.OnlyDeployer.selector);
@@ -103,7 +103,7 @@ contract EscrowNativeTest is Test {
 
     function testFundNativeIncorrectAmount() public {
         vm.startPrank(deployer);
-        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowNative unfundedEscrow = new EscrowNative(deployer, recipient, EXPECTED_AMOUNT, 0, 0);
 
         vm.expectRevert(EscrowNative.IncorrectETHAmount.selector);
         unfundedEscrow.fund{value: 0.5 ether}(REWARD_AMOUNT, PAYMENT_AMOUNT);
@@ -123,7 +123,7 @@ contract EscrowNativeTest is Test {
 
     function testBondNativeNotFunded() public {
         vm.prank(deployer);
-        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowNative unfundedEscrow = new EscrowNative(deployer, recipient, EXPECTED_AMOUNT, 0, 0);
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.NotFunded.selector);
@@ -204,7 +204,7 @@ contract EscrowNativeTest is Test {
 
     function testCollectNativeNotFunded() public {
         vm.prank(deployer);
-        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowNative unfundedEscrow = new EscrowNative(deployer, recipient, EXPECTED_AMOUNT, 0, 0);
 
         EscrowNative.NativeTransferProof memory dummyProof = EscrowNative.NativeTransferProof({
             blockHeader: hex"",
@@ -345,7 +345,7 @@ contract EscrowNativeTest is Test {
 
     function testCancelAndWithdrawNativeNotFunded() public {
         vm.prank(deployer);
-        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowNative unfundedEscrow = new EscrowNative(deployer, recipient, EXPECTED_AMOUNT, 0, 0);
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBase.NotFunded.selector);

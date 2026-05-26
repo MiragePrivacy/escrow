@@ -65,7 +65,7 @@ contract EscrowERC20Test is Test {
         address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow, REWARD_AMOUNT + PAYMENT_AMOUNT);
 
-        escrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
+        escrow = new EscrowERC20(deployer, address(token), recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
         vm.stopPrank();
 
         token.mint(executor, 10000e18);
@@ -86,7 +86,7 @@ contract EscrowERC20Test is Test {
         address futureEscrow2 = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow2, REWARD_AMOUNT + PAYMENT_AMOUNT);
 
-        EscrowERC20 escrow2 = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowERC20 escrow2 = new EscrowERC20(deployer, address(token), recipient, EXPECTED_AMOUNT, 0, 0);
 
         token.approve(address(escrow2), REWARD_AMOUNT + PAYMENT_AMOUNT);
         escrow2.fund(REWARD_AMOUNT, PAYMENT_AMOUNT);
@@ -101,7 +101,7 @@ contract EscrowERC20Test is Test {
 
     function testFundZeroReward() public {
         vm.startPrank(deployer);
-        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowERC20 unfundedEscrow = new EscrowERC20(deployer, address(token), recipient, EXPECTED_AMOUNT, 0, 0);
 
         token.approve(address(unfundedEscrow), PAYMENT_AMOUNT);
         vm.expectRevert(EscrowERC20.ZeroRewardAmount.selector);
@@ -141,7 +141,7 @@ contract EscrowERC20Test is Test {
     function testBondNotFunded() public {
         // Create an unfunded escrow
         vm.startPrank(deployer);
-        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowERC20 unfundedEscrow = new EscrowERC20(deployer, address(token), recipient, EXPECTED_AMOUNT, 0, 0);
         vm.stopPrank();
 
         vm.startPrank(executor);
@@ -259,7 +259,7 @@ contract EscrowERC20Test is Test {
 
     function testCollectNotFunded() public {
         vm.prank(deployer);
-        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowERC20 unfundedEscrow = new EscrowERC20(deployer, address(token), recipient, EXPECTED_AMOUNT, 0, 0);
 
         EscrowERC20.ReceiptProof memory dummyProof = EscrowERC20.ReceiptProof({
             blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
@@ -374,7 +374,7 @@ contract EscrowERC20Test is Test {
 
     function testCancelAndWithdrawNotFunded() public {
         vm.prank(deployer);
-        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowERC20 unfundedEscrow = new EscrowERC20(deployer, address(token), recipient, EXPECTED_AMOUNT, 0, 0);
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBase.NotFunded.selector);
