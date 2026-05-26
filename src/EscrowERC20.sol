@@ -14,11 +14,9 @@ contract EscrowERC20 is EscrowBase {
     // Custom errors
     error ZeroAddress();
     error AlreadyFunded();
-    error ZeroRewardAmount();
-    error ZeroPaymentAmount();
+    error ZeroAmount();
     error TokenTransferFailed();
     error InvalidReceiptProof();
-    error InvalidTransferEvent();
     error NoWithdrawableFunds();
 
     address public immutable tokenContract; // The tokens used in the escrow
@@ -32,33 +30,27 @@ contract EscrowERC20 is EscrowBase {
         uint256 logIndex; // Index of target log in receipt
     }
 
-    constructor(
-        address _tokenContract,
-        address _expectedRecipient,
-        uint256 _expectedAmount,
-        uint256 _currentRewardAmount,
-        uint256 _currentPaymentAmount
-    ) EscrowBase(_expectedRecipient, _expectedAmount) {
+    constructor(address _tokenContract, uint256 _amount, bytes32 _commitment) EscrowBase() {
         if (_tokenContract == address(0)) revert ZeroAddress();
         tokenContract = _tokenContract;
 
-        if (_currentRewardAmount > 0 && _currentPaymentAmount > 0) {
-            fund(_currentRewardAmount, _currentPaymentAmount);
+        if (_amount > 0) {
+            _fund(_amount, _commitment);
         }
     }
 
-    // takes currentRewardAmount + currentPaymentAmount from the deployer's balance from the tokenContract.
-    function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) public {
+    function fund(uint256 _amount, bytes32 _commitment) external {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (funded) revert AlreadyFunded();
-        if (_currentRewardAmount == 0) revert ZeroRewardAmount();
-        if (_currentPaymentAmount == 0) revert ZeroPaymentAmount();
+        _fund(_amount, _commitment);
+    }
 
-        currentRewardAmount = _currentRewardAmount;
-        originalRewardAmount = _currentRewardAmount;
-        currentPaymentAmount = _currentPaymentAmount;
-        if (!IERC20(tokenContract).transferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount))
-        {
+    function _fund(uint256 _amount, bytes32 _commitment) internal {
+        if (_amount == 0) revert ZeroAmount();
+
+        deposit = _amount;
+        commitment = _commitment;
+        if (!IERC20(tokenContract).transferFrom(msg.sender, address(this), _amount)) {
             revert TokenTransferFailed();
         }
         funded = true;
@@ -78,8 +70,8 @@ contract EscrowERC20 is EscrowBase {
         _setBondData(_bondAmount);
     }
 
-    // Validates a given merkle proof against a recent block hash and checks the Transfer event's contents
-    function collect(ReceiptProof calldata proof, uint256 targetBlockNumber) external {
+    // Validates a given merkle proof against a recent block hash and verifies the commitment
+    function collect(ReceiptProof calldata proof, uint256 targetBlockNumber, bytes32 salt) external {
         _validateBlockHeader(proof.blockHeader, targetBlockNumber);
 
         // Extract receipts root and verify receipt inclusion
@@ -88,11 +80,13 @@ contract EscrowERC20 is EscrowBase {
             revert InvalidReceiptProof();
         }
 
-        // Validate the Transfer event
-        if (!ReceiptValidator.validateTransferInReceipt(
-                proof.receiptRlp, proof.logIndex, tokenContract, expectedRecipient, expectedAmount
-            )) {
-            revert InvalidTransferEvent();
+        // Extract transfer fields from the proven receipt
+        (address token, address recipient, uint256 amount) =
+            ReceiptValidator.extractTransferFromReceipt(proof.receiptRlp, proof.logIndex);
+
+        // Verify commitment: H(recipient, token, amount, salt)
+        if (keccak256(abi.encodePacked(recipient, token, amount, salt)) != commitment) {
+            revert CommitmentMismatch();
         }
 
         _payout();
@@ -114,18 +108,18 @@ contract EscrowERC20 is EscrowBase {
         if (!success) revert TokenTransferFailed();
     }
 
-    /// @notice Cancel and withdraw funds in a single transaction.
-    /// Reverts if a node has already bonded.
+    /// @notice Cancel and withdraw all funds in a single transaction.
+    /// Reverts if a bond is still active.
     function cancelAndWithdraw() external {
         cancellationRequest = true;
         _validateWithdraw();
+        _handleExpiredBond();
         _tryResetBondData();
 
-        uint256 withdrawableAmount = _calculateWithdrawableAmount();
+        uint256 withdrawableAmount = deposit;
+        if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 
         _clearWithdrawState();
-
-        if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 
         if (!IERC20(tokenContract).transfer(msg.sender, withdrawableAmount)) {
             revert TokenTransferFailed();

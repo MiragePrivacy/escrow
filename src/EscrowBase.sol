@@ -19,29 +19,21 @@ abstract contract EscrowBase {
     error CancellationRequested();
     error ExecutorAlreadyBonded();
     error InsufficientBond();
+    error CommitmentMismatch();
 
-    // The following variables are set up in the constructor.
     address immutable deployerAddress;
-    uint256 public currentRewardAmount;
-    uint256 public currentPaymentAmount;
-    uint256 public originalRewardAmount;
+    uint256 public deposit; // Total deposited (original + seized bonds)
+    bytes32 public commitment; // H(recipient, [token,] amount, salt)
 
-    // The following variables are for Merkle proof validation
-    address public immutable expectedRecipient; // The intended recipient of the transfer
-    uint256 public immutable expectedAmount; // The expected transfer amount
-    uint256 public constant MAX_BLOCK_LOOKBACK = 256; // Maximum blocks to look back for validation
+    uint256 public constant MAX_BLOCK_LOOKBACK = 256;
 
-    // The following variables are dynamically adjusted by the contract when a bond or cancellation request is submitted.
     address public bondedExecutor;
     uint256 public executionDeadline;
     uint256 public bondAmount;
-    uint256 public totalBondsDeposited;
     bool public cancellationRequest;
-    bool public funded; // marks if the contract has funds to pay out the executors or not (if it doesn't have funds, no executor should be accepted)
+    bool public funded;
 
-    constructor(address _expectedRecipient, uint256 _expectedAmount) {
-        expectedRecipient = _expectedRecipient;
-        expectedAmount = _expectedAmount;
+    constructor() {
         deployerAddress = msg.sender;
     }
 
@@ -86,11 +78,10 @@ abstract contract EscrowBase {
         executionDeadline = 0;
     }
 
-    // Internal helper to handle expired bonds (adds bond to reward pool)
+    // Internal helper to handle expired bonds (adds bond to deposit pool)
     function _handleExpiredBond() internal {
         if (executionDeadline > 0 && block.timestamp > executionDeadline) {
-            currentRewardAmount += bondAmount;
-            totalBondsDeposited += bondAmount;
+            deposit += bondAmount;
             _tryResetBondData();
         }
     }
@@ -100,7 +91,7 @@ abstract contract EscrowBase {
         if (!funded) revert NotFunded();
         if (cancellationRequest) revert CancellationRequested();
         if (is_bonded()) revert ExecutorAlreadyBonded();
-        if (_bondAmount < currentRewardAmount / 2) revert InsufficientBond();
+        if (_bondAmount < deposit / 400) revert InsufficientBond();
     }
 
     // Internal helper to set bond data
@@ -116,13 +107,13 @@ abstract contract EscrowBase {
         bondAmount = 0;
         executionDeadline = 0;
         funded = false;
-        currentPaymentAmount = 0;
-        currentRewardAmount = 0;
+        deposit = 0;
+        commitment = bytes32(0);
     }
 
     // Internal helper to calculate payout amount
     function _calculatePayout() internal view returns (uint256) {
-        return bondAmount + currentRewardAmount + currentPaymentAmount;
+        return bondAmount + deposit;
     }
 
     // Internal helper to validate withdraw requirements
@@ -131,15 +122,10 @@ abstract contract EscrowBase {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
     }
 
-    // Internal helper to calculate withdrawable amount and clear state
-    function _calculateWithdrawableAmount() internal view returns (uint256) {
-        return currentPaymentAmount + originalRewardAmount;
-    }
-
     // Internal helper to clear state after withdraw
     function _clearWithdrawState() internal {
         funded = false;
-        currentPaymentAmount = 0;
-        currentRewardAmount = 0;
+        deposit = 0;
+        commitment = bytes32(0);
     }
 }

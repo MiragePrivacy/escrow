@@ -14,32 +14,26 @@ library ReceiptValidator {
     // Custom errors
     error InvalidRLP();
     error InvalidAddress();
-    error WrongTokenContract();
     error WrongEventSignature();
-    error ToAddressMismatch();
-    error AmountMismatch();
     error ReceiptStatusNotSuccess();
     error UnsupportedTxType();
-    error RecipientMismatch();
 
     // Pre-computed Transfer(address,address,uint256) event signature
     bytes32 private constant TRANSFER_EVENT_SIG = 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef;
 
     /**
-     * @dev Validate Transfer event in receipt
+     * @dev Extract Transfer event fields from receipt
      * @param receiptRlp RLP-encoded transaction receipt
      * @param logIndex Index of the target log in the receipt
-     * @param toAddress Expected recipient address
-     * @param expectedAmount Expected transfer amount
-     * @return True if validation passes
+     * @return token The emitting token contract address
+     * @return recipient The transfer recipient
+     * @return amount The transfer amount
      */
-    function validateTransferInReceipt(
-        bytes calldata receiptRlp,
-        uint256 logIndex,
-        address tokenContract,
-        address toAddress,
-        uint256 expectedAmount
-    ) internal pure returns (bool) {
+    function extractTransferFromReceipt(bytes calldata receiptRlp, uint256 logIndex)
+        internal
+        pure
+        returns (address token, address recipient, uint256 amount)
+    {
         uint256 offset = 0;
 
         // Handle typed receipts (EIP-2718)
@@ -79,26 +73,23 @@ library ReceiptValidator {
             }
         }
 
-        // Validate the target log
-        return validateTransferLog(receiptRlp, offset, tokenContract, toAddress, expectedAmount);
+        // Extract fields from the target log
+        return extractTransferLog(receiptRlp, offset);
     }
 
     /**
-     * @dev Validate a Transfer event log
+     * @dev Extract Transfer event fields from a log entry
      * @param receiptRlp The receipt data
      * @param logOffset Offset to the target log
-     * @param tokenContract Expected token contract address
-     * @param toAddress Expected recipient address
-     * @param expectedAmount Expected transfer amount
-     * @return True if validation passes
+     * @return token The emitting token contract address
+     * @return recipient The transfer recipient
+     * @return amount The transfer amount
      */
-    function validateTransferLog(
-        bytes calldata receiptRlp,
-        uint256 logOffset,
-        address tokenContract,
-        address toAddress,
-        uint256 expectedAmount
-    ) private pure returns (bool) {
+    function extractTransferLog(bytes calldata receiptRlp, uint256 logOffset)
+        private
+        pure
+        returns (address token, address recipient, uint256 amount)
+    {
         uint256 offset = logOffset;
 
         // Parse target log: [address, topics[], data]
@@ -109,33 +100,29 @@ library ReceiptValidator {
             offset += 1;
         }
 
-        // Parse emitter address (should be the token contract)
+        // Parse emitter address (token contract)
         if (uint8(receiptRlp[offset]) != 0x94) revert InvalidAddress();
-        address emitter;
         assembly {
-            emitter := shr(96, calldataload(add(receiptRlp.offset, add(offset, 1))))
+            token := shr(96, calldataload(add(receiptRlp.offset, add(offset, 1))))
         }
-        if (emitter != tokenContract) revert WrongTokenContract();
         offset += 21;
 
-        // Parse and validate topics
-        return validateTransferTopics(receiptRlp, offset, toAddress, expectedAmount);
+        // Extract topics and data
+        (recipient, amount) = extractTransferTopics(receiptRlp, offset);
     }
 
     /**
-     * @dev Validate event topics for Transfer event
+     * @dev Extract recipient and amount from Transfer event topics and data
      * @param receiptRlp The receipt data
      * @param topicsOffset Offset to the topics array
-     * @param toAddress Expected recipient address
-     * @param expectedAmount Expected transfer amount
-     * @return True if validation passes
+     * @return recipient The transfer recipient
+     * @return amount The transfer amount
      */
-    function validateTransferTopics(
-        bytes calldata receiptRlp,
-        uint256 topicsOffset,
-        address toAddress,
-        uint256 expectedAmount
-    ) private pure returns (bool) {
+    function extractTransferTopics(bytes calldata receiptRlp, uint256 topicsOffset)
+        private
+        pure
+        returns (address recipient, uint256 amount)
+    {
         uint256 offset = topicsOffset;
 
         // Parse topics array
@@ -150,27 +137,28 @@ library ReceiptValidator {
         bytes32 eventSig = receiptRlp.extractBytes32(offset);
         if (eventSig != TRANSFER_EVENT_SIG) revert WrongEventSignature();
 
-        // Check second topic (from address) --skip validation
+        // Skip event signature topic
         offset = receiptRlp.skipItem(offset);
 
-        // Check third topic (to address)
+        // Skip second topic (from address)
         offset = receiptRlp.skipItem(offset);
+
+        // Third topic (to address)
         bytes32 logToAddr = receiptRlp.extractBytes32(offset);
-        if (address(uint160(uint256(logToAddr))) != toAddress) revert ToAddressMismatch();
+        recipient = address(uint160(uint256(logToAddr)));
 
-        // Parse and validate data payload (amount)
+        // Parse data payload (amount)
         offset = receiptRlp.skipItem(topicsOffset); // Skip entire topics array
-        uint256 logAmount;
         {
             uint8 dataPrefix = uint8(receiptRlp[offset]);
             if (dataPrefix < 0x80) {
-                logAmount = dataPrefix;
+                amount = dataPrefix;
             } else if (dataPrefix == 0x80) {
-                logAmount = 0;
+                amount = 0;
             } else if (dataPrefix <= 0xa0) {
                 uint256 len = dataPrefix - 0x80;
                 for (uint256 i = 0; i < len;) {
-                    logAmount = (logAmount << 8) | uint8(receiptRlp[offset + 1 + i]);
+                    amount = (amount << 8) | uint8(receiptRlp[offset + 1 + i]);
                     unchecked {
                         ++i;
                     }
@@ -179,9 +167,6 @@ library ReceiptValidator {
                 revert InvalidRLP();
             }
         }
-        if (logAmount != expectedAmount) revert AmountMismatch();
-
-        return true;
     }
 
     /**
@@ -218,13 +203,12 @@ library ReceiptValidator {
     }
 
     /**
-     * @dev Validate native ETH transfer by checking tx 'to' and 'value' fields
+     * @dev Extract recipient and amount from native ETH transfer tx fields
+     * @param txRlp RLP-encoded transaction
+     * @return recipient The transfer recipient
+     * @return amount The transfer value
      */
-    function validateNativeTransfer(bytes calldata txRlp, address expectedRecipient, uint256 expectedAmount)
-        internal
-        pure
-        returns (bool)
-    {
+    function extractNativeTransfer(bytes calldata txRlp) internal pure returns (address recipient, uint256 amount) {
         uint256 offset = 0;
 
         // Skip type prefix for typed transactions (EIP-2718)
@@ -253,33 +237,27 @@ library ReceiptValidator {
             }
         }
 
-        // Validate 'to' address (0x94 prefix = 20 byte string)
+        // Extract 'to' address (0x94 prefix = 20 byte string)
         if (uint8(txRlp[offset]) != 0x94) revert InvalidAddress();
-        address to;
         assembly {
-            to := shr(96, calldataload(add(txRlp.offset, add(offset, 1))))
+            recipient := shr(96, calldataload(add(txRlp.offset, add(offset, 1))))
         }
-        if (to != expectedRecipient) revert RecipientMismatch();
         offset += 21;
 
-        // Validate 'value'
+        // Extract 'value'
         uint8 prefix = uint8(txRlp[offset]);
-        uint256 value;
         if (prefix < 0x80) {
-            value = prefix;
+            amount = prefix;
         } else if (prefix == 0x80) {
-            value = 0;
+            amount = 0;
         } else {
             uint256 len = prefix - 0x80;
             for (uint256 i = 0; i < len;) {
-                value = (value << 8) | uint8(txRlp[offset + 1 + i]);
+                amount = (amount << 8) | uint8(txRlp[offset + 1 + i]);
                 unchecked {
                     ++i;
                 }
             }
         }
-        if (value != expectedAmount) revert AmountMismatch();
-
-        return true;
     }
 }

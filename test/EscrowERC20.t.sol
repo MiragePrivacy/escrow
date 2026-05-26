@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.30;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {EscrowERC20} from "../src/EscrowERC20.sol";
 import {EscrowBase} from "../src/EscrowBase.sol";
 
@@ -47,10 +47,10 @@ contract EscrowERC20Test is Test {
     address public recipient;
     address public other;
 
-    uint256 constant EXPECTED_AMOUNT = 1000e18;
-    uint256 constant REWARD_AMOUNT = 500e18;
-    uint256 constant PAYMENT_AMOUNT = 500e18;
-    uint256 constant BOND_AMOUNT = 250e18; // Half of reward amount
+    uint256 constant DEPOSIT_AMOUNT = 1000e18;
+    uint256 constant BOND_AMOUNT = 2.5e18; // 0.25% of deposit
+    bytes32 constant SALT = bytes32(uint256(99));
+    bytes32 COMMITMENT;
 
     function setUp() public {
         deployer = makeAddr("deployer");
@@ -58,71 +58,64 @@ contract EscrowERC20Test is Test {
         recipient = makeAddr("recipient");
         other = makeAddr("other");
 
+        COMMITMENT = keccak256(abi.encodePacked(recipient, address(0), DEPOSIT_AMOUNT, SALT));
+
         vm.startPrank(deployer);
         token = new MockERC20();
         token.mint(deployer, 10000e18);
 
-        address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
-        token.approve(futureEscrow, REWARD_AMOUNT + PAYMENT_AMOUNT);
-
-        escrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
+        escrow = new EscrowERC20(address(token), 0, bytes32(0));
+        token.approve(address(escrow), DEPOSIT_AMOUNT);
+        escrow.fund(DEPOSIT_AMOUNT, COMMITMENT);
         vm.stopPrank();
 
         token.mint(executor, 10000e18);
         token.mint(other, 10000e18);
     }
 
-    function testConstructor() public {
-        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT);
-        assertEq(escrow.currentPaymentAmount(), PAYMENT_AMOUNT);
+    function testConstructor() public view {
+        assertEq(escrow.deposit(), DEPOSIT_AMOUNT);
         assertEq(escrow.funded(), true);
-        assertEq(escrow.expectedRecipient(), recipient);
-        assertEq(escrow.expectedAmount(), EXPECTED_AMOUNT);
+        assertEq(escrow.commitment(), COMMITMENT);
     }
 
     function testFund() public {
         vm.startPrank(deployer);
 
-        address futureEscrow2 = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
-        token.approve(futureEscrow2, REWARD_AMOUNT + PAYMENT_AMOUNT);
+        EscrowERC20 escrow2 = new EscrowERC20(address(token), 0, bytes32(0));
 
-        EscrowERC20 escrow2 = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
-
-        token.approve(address(escrow2), REWARD_AMOUNT + PAYMENT_AMOUNT);
-        escrow2.fund(REWARD_AMOUNT, PAYMENT_AMOUNT);
+        token.approve(address(escrow2), DEPOSIT_AMOUNT);
+        escrow2.fund(DEPOSIT_AMOUNT, COMMITMENT);
         vm.stopPrank();
 
-        assertEq(escrow2.currentRewardAmount(), REWARD_AMOUNT);
-        assertEq(escrow2.originalRewardAmount(), REWARD_AMOUNT);
-        assertEq(escrow2.currentPaymentAmount(), PAYMENT_AMOUNT);
+        assertEq(escrow2.deposit(), DEPOSIT_AMOUNT);
         assertEq(escrow2.funded(), true);
-        assertEq(token.balanceOf(address(escrow2)), REWARD_AMOUNT + PAYMENT_AMOUNT);
+        assertEq(escrow2.commitment(), COMMITMENT);
+        assertEq(token.balanceOf(address(escrow2)), DEPOSIT_AMOUNT);
     }
 
-    function testFundZeroReward() public {
+    function testFundZeroAmount() public {
         vm.startPrank(deployer);
-        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), 0, bytes32(0));
 
-        token.approve(address(unfundedEscrow), PAYMENT_AMOUNT);
-        vm.expectRevert(EscrowERC20.ZeroRewardAmount.selector);
-        unfundedEscrow.fund(0, PAYMENT_AMOUNT);
+        vm.expectRevert(EscrowERC20.ZeroAmount.selector);
+        unfundedEscrow.fund(0, COMMITMENT);
         vm.stopPrank();
     }
 
     function testFundOnlyDeployer() public {
         vm.startPrank(executor);
-        token.approve(address(escrow), REWARD_AMOUNT + PAYMENT_AMOUNT);
+        token.approve(address(escrow), DEPOSIT_AMOUNT);
         vm.expectRevert(EscrowBase.OnlyDeployer.selector);
-        escrow.fund(REWARD_AMOUNT, PAYMENT_AMOUNT);
+        escrow.fund(DEPOSIT_AMOUNT, COMMITMENT);
         vm.stopPrank();
     }
 
     function testFundAlreadyFunded() public {
-        // Escrow is already funded in setUp, so any fund() call should revert
         vm.startPrank(deployer);
-        token.approve(address(escrow), REWARD_AMOUNT + PAYMENT_AMOUNT);
+        token.approve(address(escrow), DEPOSIT_AMOUNT);
         vm.expectRevert(EscrowERC20.AlreadyFunded.selector);
-        escrow.fund(REWARD_AMOUNT, PAYMENT_AMOUNT);
+        escrow.fund(DEPOSIT_AMOUNT, COMMITMENT);
         vm.stopPrank();
     }
 
@@ -139,9 +132,8 @@ contract EscrowERC20Test is Test {
     }
 
     function testBondNotFunded() public {
-        // Create an unfunded escrow
         vm.startPrank(deployer);
-        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), 0, bytes32(0));
         vm.stopPrank();
 
         vm.startPrank(executor);
@@ -175,9 +167,8 @@ contract EscrowERC20Test is Test {
 
         vm.warp(block.timestamp + 6 minutes);
 
-        // After first bond fails, reward = 500 + 250 = 750, so minimum bond = 375
-        uint256 updatedReward = REWARD_AMOUNT + BOND_AMOUNT;
-        uint256 newBondAmount = updatedReward / 2;
+        uint256 updatedDeposit = DEPOSIT_AMOUNT + BOND_AMOUNT;
+        uint256 newBondAmount = updatedDeposit / 400;
 
         vm.startPrank(other);
         token.approve(address(escrow), newBondAmount);
@@ -185,32 +176,31 @@ contract EscrowERC20Test is Test {
         vm.stopPrank();
 
         assertEq(escrow.bondedExecutor(), other);
-        assertEq(escrow.currentRewardAmount(), updatedReward);
+        assertEq(escrow.deposit(), updatedDeposit);
         assertEq(escrow.bondAmount(), newBondAmount);
-        assertEq(escrow.totalBondsDeposited(), BOND_AMOUNT);
     }
 
-    function testBondRequiresUpdatedRewardAmount() public {
+    function testBondRequiresUpdatedDepositMinimum() public {
         _bondExecutor();
 
         vm.warp(block.timestamp + 6 minutes);
 
-        uint256 updatedReward = REWARD_AMOUNT + BOND_AMOUNT;
-        uint256 minimumRequiredBond = updatedReward / 2;
+        uint256 updatedDeposit = DEPOSIT_AMOUNT + BOND_AMOUNT;
+        uint256 minimumRequiredBond = updatedDeposit / 400;
 
         vm.startPrank(other);
         token.approve(address(escrow), type(uint256).max);
 
+        // Bond below minimum should fail
         vm.expectRevert(EscrowBase.InsufficientBond.selector);
-        escrow.bond(BOND_AMOUNT);
+        escrow.bond(minimumRequiredBond - 1);
 
         escrow.bond(minimumRequiredBond);
         vm.stopPrank();
 
-        assertEq(escrow.currentRewardAmount(), updatedReward);
+        assertEq(escrow.deposit(), updatedDeposit);
         assertEq(escrow.bondAmount(), minimumRequiredBond);
         assertEq(escrow.bondedExecutor(), other);
-        assertEq(escrow.totalBondsDeposited(), BOND_AMOUNT);
     }
 
     function testRequestCancellation() public {
@@ -254,12 +244,12 @@ contract EscrowERC20Test is Test {
 
         vm.prank(executor);
         vm.expectRevert();
-        escrow.collect(dummyProof, block.number - 1);
+        escrow.collect(dummyProof, block.number - 1, SALT);
     }
 
     function testCollectNotFunded() public {
         vm.prank(deployer);
-        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), 0, bytes32(0));
 
         EscrowERC20.ReceiptProof memory dummyProof = EscrowERC20.ReceiptProof({
             blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
@@ -267,7 +257,7 @@ contract EscrowERC20Test is Test {
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.NotFunded.selector);
-        unfundedEscrow.collect(dummyProof, block.number - 1);
+        unfundedEscrow.collect(dummyProof, block.number - 1, SALT);
     }
 
     function testCollectNotBondedExecutor() public {
@@ -279,7 +269,7 @@ contract EscrowERC20Test is Test {
 
         vm.prank(other);
         vm.expectRevert(EscrowBase.OnlyBondedExecutor.selector);
-        escrow.collect(dummyProof, block.number - 1);
+        escrow.collect(dummyProof, block.number - 1, SALT);
     }
 
     function testCollectAfterDeadline() public {
@@ -293,7 +283,7 @@ contract EscrowERC20Test is Test {
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.OnlyBondedExecutor.selector);
-        escrow.collect(dummyProof, block.number - 1);
+        escrow.collect(dummyProof, block.number - 1, SALT);
     }
 
     function testIsBonded() public {
@@ -339,9 +329,8 @@ contract EscrowERC20Test is Test {
 
         vm.warp(block.timestamp + 6 minutes);
 
-        // After first bond fails, reward = 500 + 250 = 750, so minimum bond = 375
-        uint256 updatedReward = REWARD_AMOUNT + BOND_AMOUNT;
-        uint256 newBondAmount = updatedReward / 2;
+        uint256 updatedDeposit = DEPOSIT_AMOUNT + BOND_AMOUNT;
+        uint256 newBondAmount = updatedDeposit / 400;
 
         vm.startPrank(other);
         token.approve(address(escrow), newBondAmount);
@@ -349,7 +338,7 @@ contract EscrowERC20Test is Test {
         vm.stopPrank();
 
         assertEq(escrow.bondedExecutor(), other);
-        assertEq(escrow.currentRewardAmount(), updatedReward);
+        assertEq(escrow.deposit(), updatedDeposit);
         assertEq(escrow.bondAmount(), newBondAmount);
     }
 
@@ -361,9 +350,8 @@ contract EscrowERC20Test is Test {
 
         assertTrue(escrow.cancellationRequest());
         assertFalse(escrow.funded());
-        assertEq(escrow.currentPaymentAmount(), 0);
-        assertEq(escrow.currentRewardAmount(), 0);
-        assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+        assertEq(escrow.deposit(), 0);
+        assertEq(token.balanceOf(deployer), initialBalance + DEPOSIT_AMOUNT);
     }
 
     function testCancelAndWithdrawOnlyDeployer() public {
@@ -374,7 +362,7 @@ contract EscrowERC20Test is Test {
 
     function testCancelAndWithdrawNotFunded() public {
         vm.prank(deployer);
-        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, 0, 0);
+        EscrowERC20 unfundedEscrow = new EscrowERC20(address(token), 0, bytes32(0));
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBase.NotFunded.selector);
@@ -401,11 +389,10 @@ contract EscrowERC20Test is Test {
 
         assertTrue(escrow.cancellationRequest());
         assertFalse(escrow.funded());
-        assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+        assertEq(token.balanceOf(deployer), initialBalance + DEPOSIT_AMOUNT + BOND_AMOUNT);
     }
 
     function testCancelAndWithdrawPreventsRaceCondition() public {
-        // Deployer atomically cancels and withdraws
         vm.prank(deployer);
         escrow.cancelAndWithdraw();
 
@@ -428,7 +415,7 @@ contract EscrowERC20Test is Test {
 
         assertTrue(escrow.cancellationRequest());
         assertFalse(escrow.funded());
-        assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+        assertEq(token.balanceOf(deployer), initialBalance + DEPOSIT_AMOUNT);
     }
 
     function testCancelAndWithdrawAfterCollectingBonds() public {
@@ -446,8 +433,9 @@ contract EscrowERC20Test is Test {
         vm.prank(deployer);
         escrow.cancelAndWithdraw();
 
-        assertEq(token.balanceOf(deployer), initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
-        assertEq(token.balanceOf(address(escrow)), BOND_AMOUNT);
+        // Deployer gets back everything (deposit + seized bond)
+        assertEq(token.balanceOf(deployer), initialBalance + DEPOSIT_AMOUNT + BOND_AMOUNT);
+        assertEq(token.balanceOf(address(escrow)), 0);
     }
 
     function _bondExecutor() internal {
