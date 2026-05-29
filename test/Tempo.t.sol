@@ -214,7 +214,7 @@ contract TempoTest is Test {
         proofs[1] = _erc20BatchProof(proof, secondTransferIndexes, reusedLogIndexes);
 
         vm.prank(FROM_ADDRESS);
-        vm.expectRevert(EscrowBatch.DuplicateLogIndex.selector);
+        vm.expectRevert(EscrowBatch.DuplicateProofItem.selector);
         escrow.collect(proofs);
     }
 

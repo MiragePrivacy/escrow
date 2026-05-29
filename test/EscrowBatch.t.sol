@@ -190,7 +190,7 @@ contract EscrowBatchTest is Test {
 
         vm.startPrank(other);
         token.approve(address(escrow), BOND_AMOUNT);
-        vm.expectRevert(EscrowBatch.TransferAlreadyInBid.selector);
+        vm.expectRevert(EscrowBatch.TransferStateConflict.selector);
         escrow.bid(_singleIndex(0), BOND_AMOUNT);
         vm.stopPrank();
     }
@@ -202,7 +202,7 @@ contract EscrowBatchTest is Test {
 
         vm.startPrank(bidder);
         token.approve(address(escrow), BOND_AMOUNT);
-        vm.expectRevert(EscrowBatch.DuplicateTransferIndex.selector);
+        vm.expectRevert(EscrowBatch.DuplicateProofItem.selector);
         escrow.bid(duplicateIndexes, BOND_AMOUNT);
         vm.stopPrank();
     }
@@ -246,7 +246,7 @@ contract EscrowBatchTest is Test {
         uint256[] memory logIndexes = new uint256[](2);
 
         vm.prank(bidder);
-        vm.expectRevert(EscrowBatch.InvalidBatchProofLength.selector);
+        vm.expectRevert(EscrowBatch.MalformedProof.selector);
         escrow.collect(_proofs(transferIndexes, logIndexes));
     }
 
@@ -258,7 +258,7 @@ contract EscrowBatchTest is Test {
         logIndexes[1] = 3;
 
         vm.prank(bidder);
-        vm.expectRevert(EscrowBatch.DuplicateLogIndex.selector);
+        vm.expectRevert(EscrowBatch.DuplicateProofItem.selector);
         escrow.collect(_proofs(_fullIndexes(), logIndexes));
     }
 
@@ -273,7 +273,7 @@ contract EscrowBatchTest is Test {
         logIndexes[1] = 1;
 
         vm.prank(bidder);
-        vm.expectRevert(EscrowBatch.DuplicateTransferIndex.selector);
+        vm.expectRevert(EscrowBatch.DuplicateProofItem.selector);
         escrow.collect(_proofs(duplicateIndexes, logIndexes));
     }
 
@@ -281,7 +281,7 @@ contract EscrowBatchTest is Test {
         _placeBid(_singleIndex(0), BOND_AMOUNT);
 
         vm.prank(bidder);
-        vm.expectRevert(EscrowBatch.TransferNotInBid.selector);
+        vm.expectRevert(EscrowBatch.TransferStateConflict.selector);
         escrow.collect(_proofs(_singleIndex(1), _singleIndex(0)));
     }
 
