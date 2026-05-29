@@ -81,21 +81,13 @@ contract EscrowBatch {
     error TokenTransferFailed();
     error ETHTransferFailed();
     error IncorrectNativeAmount();
-    error InvalidBatchProofLength();
-    error DuplicateLogIndex();
-    error DuplicateTransferIndex();
-    error InvalidTransferIndex();
-    error InvalidProofShape();
-    error InvalidTxProof();
-    error TxFailed();
-    error TransferAlreadyCompleted();
-    error TransferAlreadyInBid();
-    error TransferNotInBid();
-    error MissingTransferProof();
+    error MalformedProof();
+    error ProofVerificationFailed();
+    error ProofContentMismatch();
+    error DuplicateProofItem();
     error ProofBeforeBid();
-    error InvalidReceiptProof();
-    error InvalidTransferEvent();
-    error InvalidNativeTransfer();
+    error InvalidTransferIndex();
+    error TransferStateConflict();
     error Reentrancy();
 
     // ============ Storage ============
@@ -321,7 +313,7 @@ contract EscrowBatch {
         Bid storage activeBid = bids[msg.sender];
         if (!funded) revert NotFunded();
         if (activeBid.expiresAt == 0 || block.timestamp > activeBid.expiresAt) revert OnlyActiveBidder();
-        if (proofs.length == 0) revert InvalidBatchProofLength();
+        if (proofs.length == 0) revert MalformedProof();
 
         bool[] memory seenTransfers = new bool[](expectedTransfers.length);
         bytes32[] memory seenProofItems = new bytes32[](expectedTransfers.length);
@@ -329,7 +321,7 @@ contract EscrowBatch {
 
         for (uint256 proofIndex = 0; proofIndex < proofs.length;) {
             BatchProof calldata batchProof = proofs[proofIndex];
-            if (batchProof.transferIndexes.length == 0) revert InvalidBatchProofLength();
+            if (batchProof.transferIndexes.length == 0) revert MalformedProof();
 
             uint256 firstTransferIndex = batchProof.transferIndexes[0];
             if (firstTransferIndex >= expectedTransfers.length) revert InvalidTransferIndex();
@@ -353,11 +345,11 @@ contract EscrowBatch {
         }
 
         uint256[] storage committedIndexes = bidTransferIndexes[msg.sender];
-        if (providedTransferCount != committedIndexes.length) revert MissingTransferProof();
+        if (providedTransferCount != committedIndexes.length) revert TransferStateConflict();
 
         for (uint256 i = 0; i < committedIndexes.length;) {
             uint256 transferIndex = committedIndexes[i];
-            if (!seenTransfers[transferIndex]) revert MissingTransferProof();
+            if (!seenTransfers[transferIndex]) revert TransferStateConflict();
             transferCompleted[transferIndex] = true;
             transferBidder[transferIndex] = address(0);
 
@@ -432,9 +424,9 @@ contract EscrowBatch {
         for (uint256 i = 0; i < transferIndexes.length;) {
             uint256 transferIndex = transferIndexes[i];
             if (transferIndex >= expectedTransfers.length) revert InvalidTransferIndex();
-            if (seenTransfers[transferIndex]) revert DuplicateTransferIndex();
-            if (transferCompleted[transferIndex]) revert TransferAlreadyCompleted();
-            if (transferBidder[transferIndex] != address(0)) revert TransferAlreadyInBid();
+            if (seenTransfers[transferIndex]) revert DuplicateProofItem();
+            if (transferCompleted[transferIndex]) revert TransferStateConflict();
+            if (transferBidder[transferIndex] != address(0)) revert TransferStateConflict();
 
             seenTransfers[transferIndex] = true;
             transferAmount += expectedTransfers[transferIndex].amount;
@@ -453,12 +445,12 @@ contract EscrowBatch {
         uint256 bidStartBlock
     ) internal view returns (uint256 proofTransferCount) {
         if (batchProof.transferIndexes.length != batchProof.logIndexes.length) {
-            revert InvalidBatchProofLength();
+            revert MalformedProof();
         }
         for (uint256 i = 0; i < batchProof.transferIndexes.length;) {
             uint256 transferIndex = _validateCollectTransfer(batchProof.transferIndexes[i], seenTransfers);
             BatchTransfer storage expectedTransfer = expectedTransfers[transferIndex];
-            if (expectedTransfer.asset == address(0)) revert InvalidProofShape();
+            if (expectedTransfer.asset == address(0)) revert MalformedProof();
 
             bytes32 proofItemId = keccak256(
                 abi.encode(
@@ -491,7 +483,7 @@ contract EscrowBatch {
                     expectedTransfer.asset,
                     expectedTransfer.recipient,
                     expectedTransfer.amount
-                )) revert InvalidTransferEvent();
+                )) revert ProofContentMismatch();
 
             unchecked {
                 ++i;
@@ -507,12 +499,12 @@ contract EscrowBatch {
         uint256 bidStartBlock
     ) internal view returns (uint256 transferIndex) {
         if (batchProof.transferIndexes.length != 1 || batchProof.logIndexes.length != 0) {
-            revert InvalidBatchProofLength();
+            revert MalformedProof();
         }
 
         transferIndex = _validateCollectTransfer(batchProof.transferIndexes[0], seenTransfers);
         BatchTransfer storage expectedTransfer = expectedTransfers[transferIndex];
-        if (expectedTransfer.asset != address(0)) revert InvalidProofShape();
+        if (expectedTransfer.asset != address(0)) revert MalformedProof();
 
         bytes32 proofItemId = keccak256(
             abi.encode(
@@ -535,8 +527,8 @@ contract EscrowBatch {
         returns (uint256)
     {
         if (transferIndex >= expectedTransfers.length) revert InvalidTransferIndex();
-        if (seenTransfers[transferIndex]) revert DuplicateTransferIndex();
-        if (transferBidder[transferIndex] != msg.sender) revert TransferNotInBid();
+        if (seenTransfers[transferIndex]) revert DuplicateProofItem();
+        if (transferBidder[transferIndex] != msg.sender) revert TransferStateConflict();
         return transferIndex;
     }
 
@@ -545,7 +537,7 @@ contract EscrowBatch {
 
         bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(proof.blockHeader);
         if (!MPTVerifier.verifyReceiptProof(proof.receiptRlp, proof.proofNodes, proof.receiptPath, receiptsRoot)) {
-            revert InvalidReceiptProof();
+            revert ProofVerificationFailed();
         }
     }
 
@@ -561,7 +553,7 @@ contract EscrowBatch {
                 batchProof.txProofNodes,
                 batchProof.receiptProof.receiptPath,
                 transactionsRoot
-            )) revert InvalidTxProof();
+            )) revert ProofVerificationFailed();
 
         bytes32 receiptsRoot = BlockHeaderParser.extractReceiptsRoot(batchProof.receiptProof.blockHeader);
         if (!MPTVerifier.verifyReceiptProof(
@@ -569,11 +561,13 @@ contract EscrowBatch {
                 batchProof.receiptProof.proofNodes,
                 batchProof.receiptProof.receiptPath,
                 receiptsRoot
-            )) revert InvalidReceiptProof();
+            )) revert ProofVerificationFailed();
 
-        if (!ReceiptValidator.validateReceiptStatus(batchProof.receiptProof.receiptRlp)) revert TxFailed();
+        if (!ReceiptValidator.validateReceiptStatus(batchProof.receiptProof.receiptRlp)) {
+            revert ProofVerificationFailed();
+        }
         if (!ReceiptValidator.validateNativeTransfer(batchProof.transactionRlp, expectedRecipient, expectedAmount)) {
-            revert InvalidNativeTransfer();
+            revert ProofContentMismatch();
         }
     }
 
@@ -592,7 +586,7 @@ contract EscrowBatch {
         pure
     {
         for (uint256 i = 0; i < seenCount;) {
-            if (seenProofItems[i] == proofItemId) revert DuplicateLogIndex();
+            if (seenProofItems[i] == proofItemId) revert DuplicateProofItem();
 
             unchecked {
                 ++i;
