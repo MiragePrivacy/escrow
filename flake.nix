@@ -27,6 +27,7 @@
       devShells.${system}.default = pkgs.mkShell {
         packages = with pkgs; [
           foundry
+          jq
           (inputs.solc.mkDefault pkgs solc_0_8_30)
         ];
       };
