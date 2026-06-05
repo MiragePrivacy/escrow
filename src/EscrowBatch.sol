@@ -238,18 +238,23 @@ contract EscrowBatch {
         currentRewardAmount = 0;
         currentTransferAmount = 0;
 
+        bool rewardAssetWithdrawn;
         for (uint256 i = 0; i < assets.length;) {
-            amounts[i] = currentAssetPaymentAmount[assets[i]];
-            currentAssetPaymentAmount[assets[i]] = 0;
+            address asset = assets[i];
+            uint256 amount = currentAssetPaymentAmount[asset];
+            if (asset == rewardAsset) {
+                amount += rewardAmount;
+                rewardAssetWithdrawn = true;
+            }
+
+            amounts[i] = amount;
+            currentAssetPaymentAmount[asset] = 0;
 
             unchecked {
                 ++i;
             }
         }
 
-        if (rewardAmount > 0) {
-            _sendAsset(rewardAsset, msg.sender, rewardAmount);
-        }
         for (uint256 i = 0; i < assets.length;) {
             if (amounts[i] > 0) {
                 _sendAsset(assets[i], msg.sender, amounts[i]);
@@ -258,6 +263,9 @@ contract EscrowBatch {
             unchecked {
                 ++i;
             }
+        }
+        if (!rewardAssetWithdrawn && rewardAmount > 0) {
+            _sendAsset(rewardAsset, msg.sender, rewardAmount);
         }
     }
 
@@ -381,17 +389,16 @@ contract EscrowBatch {
         hasBeenFunded = true;
         funded = true;
 
-        if (
-            rewardAsset != address(0)
-                && !IBatchERC20(rewardAsset).transferFrom(msg.sender, address(this), _currentRewardAmount)
-        ) {
-            revert TokenTransferFailed();
-        }
-
+        bool rewardAssetFunded;
         for (uint256 i = 0; i < paymentAssets.length;) {
             address asset = paymentAssets[i];
             uint256 amount = totalAssetPaymentAmount[asset];
             currentAssetPaymentAmount[asset] = amount;
+
+            if (asset == rewardAsset) {
+                amount += _currentRewardAmount;
+                rewardAssetFunded = true;
+            }
 
             if (asset != address(0) && !IBatchERC20(asset).transferFrom(msg.sender, address(this), amount)) {
                 revert TokenTransferFailed();
@@ -399,6 +406,12 @@ contract EscrowBatch {
 
             unchecked {
                 ++i;
+            }
+        }
+
+        if (!rewardAssetFunded && rewardAsset != address(0)) {
+            if (!IBatchERC20(rewardAsset).transferFrom(msg.sender, address(this), _currentRewardAmount)) {
+                revert TokenTransferFailed();
             }
         }
     }
@@ -703,13 +716,13 @@ contract EscrowBatch {
         uint256 completedCount = indexes.length;
         bool isFinalCollection = completedTransferCount + completedCount == expectedTransfers.length;
 
-        address[] memory assets = new address[](indexes.length);
-        uint256[] memory amounts = new uint256[](indexes.length);
+        address[] memory assets = new address[](indexes.length + 1);
+        uint256[] memory amounts = new uint256[](indexes.length + 1);
+        uint256 assetCount;
         uint256 completedAmount;
         for (uint256 i = 0; i < indexes.length;) {
             BatchTransfer storage expectedTransfer = expectedTransfers[indexes[i]];
-            assets[i] = expectedTransfer.asset;
-            amounts[i] = expectedTransfer.amount;
+            assetCount = _addAssetAmount(assets, amounts, assetCount, expectedTransfer.asset, expectedTransfer.amount);
             completedAmount += expectedTransfer.amount;
             currentAssetPaymentAmount[expectedTransfer.asset] -= expectedTransfer.amount;
 
@@ -733,15 +746,38 @@ contract EscrowBatch {
         }
 
         if (rewardPayout > 0) {
-            _sendAsset(rewardAsset, bidder, rewardPayout);
+            assetCount = _addAssetAmount(assets, amounts, assetCount, rewardAsset, rewardPayout);
         }
-        for (uint256 i = 0; i < assets.length;) {
+        for (uint256 i = 0; i < assetCount;) {
             _sendAsset(assets[i], bidder, amounts[i]);
 
             unchecked {
                 ++i;
             }
         }
+    }
+
+    function _addAssetAmount(
+        address[] memory assets,
+        uint256[] memory amounts,
+        uint256 assetCount,
+        address asset,
+        uint256 amount
+    ) internal pure returns (uint256) {
+        for (uint256 i = 0; i < assetCount;) {
+            if (assets[i] == asset) {
+                amounts[i] += amount;
+                return assetCount;
+            }
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        assets[assetCount] = asset;
+        amounts[assetCount] = amount;
+        return assetCount + 1;
     }
 
     function _sendAsset(address asset, address to, uint256 amount) internal {

@@ -8,6 +8,11 @@ contract BatchMockERC20 {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
 
+    uint256 public transferCalls;
+    uint256 public transferFromCalls;
+    uint256 public totalTransferAmount;
+    uint256 public totalTransferFromAmount;
+
     event Transfer(address indexed from, address indexed to, uint256 value);
 
     function mint(address to, uint256 amount) external {
@@ -15,6 +20,8 @@ contract BatchMockERC20 {
     }
 
     function transfer(address to, uint256 amount) external returns (bool) {
+        transferCalls += 1;
+        totalTransferAmount += amount;
         require(balanceOf[msg.sender] >= amount, "Insufficient balance");
         balanceOf[msg.sender] -= amount;
         balanceOf[to] += amount;
@@ -23,6 +30,8 @@ contract BatchMockERC20 {
     }
 
     function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        transferFromCalls += 1;
+        totalTransferFromAmount += amount;
         require(balanceOf[from] >= amount, "Insufficient balance");
         require(allowance[from][msg.sender] >= amount, "Insufficient allowance");
         balanceOf[from] -= amount;
@@ -35,6 +44,13 @@ contract BatchMockERC20 {
     function approve(address spender, uint256 amount) external returns (bool) {
         allowance[msg.sender][spender] = amount;
         return true;
+    }
+
+    function resetCallStats() external {
+        transferCalls = 0;
+        transferFromCalls = 0;
+        totalTransferAmount = 0;
+        totalTransferFromAmount = 0;
     }
 }
 
@@ -85,6 +101,8 @@ contract EscrowBatchTest is Test {
         assertEq(escrow.completedTransferCount(), 0);
         assertEq(escrow.activeBidCount(), 0);
         assertTrue(escrow.funded());
+        assertEq(token.transferFromCalls(), 1);
+        assertEq(token.totalTransferFromAmount(), PAYMENT_AMOUNT + REWARD_AMOUNT);
 
         (address firstAsset, address firstRecipient, uint256 firstAmount) = escrow.expectedTransfers(0);
         (address secondAsset, address secondRecipient, uint256 secondAmount) = escrow.expectedTransfers(1);
@@ -119,6 +137,7 @@ contract EscrowBatchTest is Test {
         EscrowBatch unfunded = new EscrowBatch(address(token), _batch(), 0);
 
         token.approve(address(unfunded), PAYMENT_AMOUNT + REWARD_AMOUNT);
+        token.resetCallStats();
         unfunded.fund(REWARD_AMOUNT);
         vm.stopPrank();
 
@@ -126,6 +145,8 @@ contract EscrowBatchTest is Test {
         assertEq(unfunded.currentTransferAmount(), PAYMENT_AMOUNT);
         assertEq(unfunded.currentRewardAmount(), REWARD_AMOUNT);
         assertEq(token.balanceOf(address(unfunded)), PAYMENT_AMOUNT + REWARD_AMOUNT);
+        assertEq(token.transferFromCalls(), 1);
+        assertEq(token.totalTransferFromAmount(), PAYMENT_AMOUNT + REWARD_AMOUNT);
     }
 
     function testFundOnlyDeployer() public {
@@ -295,6 +316,7 @@ contract EscrowBatchTest is Test {
 
     function testCancelAndWithdraw() public {
         uint256 initialBalance = token.balanceOf(deployer);
+        token.resetCallStats();
 
         vm.prank(deployer);
         escrow.cancelAndWithdraw();
@@ -302,6 +324,8 @@ contract EscrowBatchTest is Test {
         assertTrue(escrow.cancellationRequest());
         assertFalse(escrow.funded());
         assertEq(token.balanceOf(deployer), initialBalance + PAYMENT_AMOUNT + REWARD_AMOUNT);
+        assertEq(token.transferCalls(), 1);
+        assertEq(token.totalTransferAmount(), PAYMENT_AMOUNT + REWARD_AMOUNT);
     }
 
     function testCancelAndWithdrawRejectsActiveBid() public {
