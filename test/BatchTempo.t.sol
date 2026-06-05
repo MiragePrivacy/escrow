@@ -108,6 +108,13 @@ contract BatchTempoTest is Test {
             logIndexes: logIndexes
         });
 
+        vm.expectCall(
+            TOKEN,
+            abi.encodeWithSelector(
+                IPathUSD.transfer.selector, BIDDER, AMOUNT_A + AMOUNT_B + AMOUNT_C + REWARD_AMOUNT + BOND_AMOUNT
+            ),
+            1
+        );
         vm.prank(BIDDER);
         escrow.collect(proofs);
 
