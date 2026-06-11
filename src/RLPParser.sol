@@ -169,4 +169,81 @@ library RLPParser {
         }
         return result;
     }
+
+    /**
+     * @dev Parse the bounds of a single RLP item (string or list).
+     * @param data The RLP encoded data
+     * @param offset Position of the item prefix
+     * @return contentStart Offset of the item's content (after the prefix)
+     * @return contentEnd Offset one past the item's content (== next item offset)
+     */
+    function itemBounds(bytes calldata data, uint256 offset)
+        internal
+        pure
+        returns (uint256 contentStart, uint256 contentEnd)
+    {
+        if (offset >= data.length) revert RLPOffsetOutOfBounds();
+
+        uint8 prefix = uint8(data[offset]);
+
+        if (prefix < 0x80) {
+            // Single byte: content is the byte itself
+            return (offset, offset + 1);
+        } else if (prefix < 0xb8) {
+            // Short string
+            uint256 length = prefix - 0x80;
+            return (offset + 1, offset + 1 + length);
+        } else if (prefix < 0xc0) {
+            // Long string
+            uint256 lengthBytes = prefix - 0xb7;
+            uint256 length = 0;
+            for (uint256 i = 0; i < lengthBytes;) {
+                length = (length << 8) | uint8(data[offset + 1 + i]);
+                unchecked {
+                    ++i;
+                }
+            }
+            return (offset + 1 + lengthBytes, offset + 1 + lengthBytes + length);
+        } else if (prefix < 0xf8) {
+            // Short list
+            uint256 length = prefix - 0xc0;
+            return (offset + 1, offset + 1 + length);
+        } else {
+            // Long list
+            uint256 lengthBytes = prefix - 0xf7;
+            uint256 length = 0;
+            for (uint256 i = 0; i < lengthBytes;) {
+                length = (length << 8) | uint8(data[offset + 1 + i]);
+                unchecked {
+                    ++i;
+                }
+            }
+            return (offset + 1 + lengthBytes, offset + 1 + lengthBytes + length);
+        }
+    }
+
+    /**
+     * @dev Read a right-aligned bytes32 from an RLP string item (<= 32 bytes content),
+     * e.g. an `r` or `s` signature scalar. Single-byte items are handled too.
+     * @param data The RLP encoded data
+     * @param offset Position of the item prefix
+     * @return value The scalar, right-aligned in a bytes32
+     * @return contentEnd Offset one past the item (== next item offset)
+     */
+    function readScalar(bytes calldata data, uint256 offset)
+        internal
+        pure
+        returns (bytes32 value, uint256 contentEnd)
+    {
+        (uint256 start, uint256 end) = itemBounds(data, offset);
+        uint256 len = end - start;
+        if (len > 32) revert RLPOffsetOutOfBounds();
+        bytes32 raw;
+        assembly {
+            raw := calldataload(add(data.offset, start))
+        }
+        // Right-align: the content occupies the top `len` bytes of `raw`.
+        value = raw >> ((32 - len) * 8);
+        contentEnd = end;
+    }
 }
