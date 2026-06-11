@@ -4,6 +4,7 @@ pragma solidity 0.8.30;
 import "./BlockHeaderParser.sol";
 import "./MPTVerifier.sol";
 import "./ReceiptValidator.sol";
+import "./utils/ECDSA.sol";
 
 abstract contract EscrowBase {
     // Custom errors
@@ -19,6 +20,21 @@ abstract contract EscrowBase {
     error CancellationRequested();
     error ExecutorAlreadyBonded();
     error InsufficientBond();
+    error AlreadyCollected();
+    error SignerNotTxSender();
+
+    // EIP-712 typed-data constants. The struct and domain MUST match the off-chain
+    // signer (nomad `crates/types/src/contracts.rs::ExecutionAuth`) byte-for-byte,
+    // otherwise the recovered signer differs and the txSender check reverts.
+    bytes32 private constant _DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    bytes32 private constant _EXECUTION_TYPEHASH =
+        keccak256("ExecutionAuth(address expectedRecipient,uint256 expectedAmount,address payoutAddress)");
+    bytes32 private constant _NAME_HASH = keccak256("MirageEscrow");
+    bytes32 private constant _VERSION_HASH = keccak256("1");
+
+    // Cached EIP-712 domain separator, bound to this contract + chain at deploy.
+    bytes32 private immutable _domainSeparator;
 
     // The following variables are set up in the constructor.
     address immutable deployerAddress;
@@ -43,6 +59,26 @@ abstract contract EscrowBase {
         expectedRecipient = _expectedRecipient;
         expectedAmount = _expectedAmount;
         deployerAddress = msg.sender;
+        _domainSeparator =
+            keccak256(abi.encode(_DOMAIN_TYPEHASH, _NAME_HASH, _VERSION_HASH, block.chainid, address(this)));
+    }
+
+    // Returns the EIP-712 domain separator for this escrow.
+    function domainSeparator() public view returns (bytes32) {
+        return _domainSeparator;
+    }
+
+    // EIP-712 digest for an ExecutionAuth over the given payoutAddress, bound to this
+    // escrow's expectedRecipient/expectedAmount commitments.
+    function _hashExecutionAuth(address payoutAddress) internal view returns (bytes32) {
+        bytes32 structHash =
+            keccak256(abi.encode(_EXECUTION_TYPEHASH, expectedRecipient, expectedAmount, payoutAddress));
+        return keccak256(abi.encodePacked("\x19\x01", _domainSeparator, structHash));
+    }
+
+    // Recovers the signer of an ExecutionAuth authorizing payoutAddress.
+    function _recoverExecutionSigner(address payoutAddress, bytes calldata sig) internal view returns (address) {
+        return ECDSA.recover(_hashExecutionAuth(payoutAddress), sig);
     }
 
     // only deployer can call this. will set the cancellation request to true.
