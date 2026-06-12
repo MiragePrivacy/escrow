@@ -86,6 +86,74 @@ library ReceiptValidator {
     }
 
     /**
+     * @dev Extract the `from` topic of a Transfer event in a receipt, without revalidating.
+     * Mirrors validateTransferInReceipt's navigation to the target log.
+     */
+    function extractTransferFrom(bytes calldata receiptRlp, uint256 logIndex) internal pure returns (address from) {
+        uint256 offset = 0;
+
+        if (receiptRlp.length > 0 && uint8(receiptRlp[0]) < 0x80) {
+            offset += 1;
+        }
+
+        if (uint8(receiptRlp[offset]) < 0xc0) revert InvalidRLP();
+        if (uint8(receiptRlp[offset]) >= 0xf8) {
+            offset += 1 + (uint8(receiptRlp[offset]) - 0xf7);
+        } else {
+            offset += 1;
+        }
+
+        // Skip status, cumulativeGasUsed, bloom to reach logs
+        for (uint256 i = 0; i < 3;) {
+            offset = receiptRlp.skipItem(offset);
+            unchecked {
+                ++i;
+            }
+        }
+
+        // Enter logs array
+        if (uint8(receiptRlp[offset]) < 0xc0) revert InvalidRLP();
+        if (uint8(receiptRlp[offset]) >= 0xf8) {
+            offset += 1 + (uint8(receiptRlp[offset]) - 0xf7);
+        } else {
+            offset += 1;
+        }
+
+        // Navigate to target log
+        for (uint256 i = 0; i < logIndex;) {
+            offset = receiptRlp.skipItem(offset);
+            unchecked {
+                ++i;
+            }
+        }
+
+        // Enter log list [address, topics[], data]
+        if (uint8(receiptRlp[offset]) < 0xc0) revert InvalidRLP();
+        if (uint8(receiptRlp[offset]) >= 0xf8) {
+            offset += 1 + (uint8(receiptRlp[offset]) - 0xf7);
+        } else {
+            offset += 1;
+        }
+
+        // Skip emitter address (0x94 + 20 bytes)
+        if (uint8(receiptRlp[offset]) != 0x94) revert InvalidAddress();
+        offset += 21;
+
+        // Enter topics array
+        if (uint8(receiptRlp[offset]) < 0xc0) revert InvalidRLP();
+        if (uint8(receiptRlp[offset]) >= 0xf8) {
+            offset += 1 + (uint8(receiptRlp[offset]) - 0xf7);
+        } else {
+            offset += 1;
+        }
+
+        // topics[0] = event sig; topics[1] = from
+        offset = receiptRlp.skipItem(offset);
+        bytes32 fromTopic = receiptRlp.extractBytes32(offset);
+        return address(uint160(uint256(fromTopic)));
+    }
+
+    /**
      * @dev Validate a Transfer event log
      * @param receiptRlp The receipt data
      * @param logOffset Offset to the target log

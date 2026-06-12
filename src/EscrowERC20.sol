@@ -64,22 +64,19 @@ contract EscrowERC20 is EscrowBase {
         funded = true;
     }
 
-    // takes _bondAmount from the caller's balance of the tokenContract. The bondstatus is now bonded, execution deadline is current block timestamp + 5 minutes. Sets bondedexecutor to the caller. Will only accept a bond if the cancellationrequest is set to false, and no one is bonded.
-    function bond(uint256 _bondAmount) external {
-        // If deadline passed and someone is bonded, add their bond to reward
-        _handleExpiredBond();
+    // Validates a Transfer-event proof against a recent block hash, then enforces the
+    // execution signature: the executionSig signer must equal the Transfer event's
+    // `from` (the token sender). For a direct token.transfer() the event `from` is the
+    // EOA that signed the transfer tx, so this binds the payout to the transfer EOA's
+    // authorization without needing the tx RLP (which the receipt proof omits).
+    function collect(
+        ReceiptProof calldata proof,
+        uint256 targetBlockNumber,
+        address payoutAddress,
+        bytes calldata executionSig
+    ) external {
+        if (collected) revert AlreadyCollected();
 
-        _validateBondRequirements(_bondAmount);
-
-        if (!IERC20(tokenContract).transferFrom(msg.sender, address(this), _bondAmount)) {
-            revert TokenTransferFailed();
-        }
-
-        _setBondData(_bondAmount);
-    }
-
-    // Validates a given merkle proof against a recent block hash and checks the Transfer event's contents
-    function collect(ReceiptProof calldata proof, uint256 targetBlockNumber) external {
         _validateBlockHeader(proof.blockHeader, targetBlockNumber);
 
         // Extract receipts root and verify receipt inclusion
@@ -95,31 +92,34 @@ contract EscrowERC20 is EscrowBase {
             revert InvalidTransferEvent();
         }
 
-        _payout();
+        // Bind the payout to the transfer sender's authorization (Transfer event `from`).
+        _validateExecutionSig(
+            payoutAddress, ReceiptValidator.extractTransferFrom(proof.receiptRlp, proof.logIndex), executionSig
+        );
+
+        _payout(payoutAddress);
     }
 
-    function _payout() internal {
+    function _payout(address payoutAddress) internal {
         uint256 payout = _calculatePayout();
-        address executor = bondedExecutor;
 
         _clearPayoutState();
 
         bool success;
         if (block.chainid == 11155111) {
             // Sepolia testnet uses non-standard send
-            success = IERC20(tokenContract).send(executor, payout);
+            success = IERC20(tokenContract).send(payoutAddress, payout);
         } else {
-            success = IERC20(tokenContract).transfer(executor, payout);
+            success = IERC20(tokenContract).transfer(payoutAddress, payout);
         }
         if (!success) revert TokenTransferFailed();
     }
 
-    /// @notice Cancel and withdraw funds in a single transaction.
-    /// Reverts if a node has already bonded.
+    /// @notice Cancel and withdraw funds in a single transaction. Deployer only,
+    /// and only while the escrow has not been collected.
     function cancelAndWithdraw() external {
-        cancellationRequest = true;
+        if (collected) revert AlreadyCollected();
         _validateWithdraw();
-        _tryResetBondData();
 
         uint256 withdrawableAmount = _calculateWithdrawableAmount();
 

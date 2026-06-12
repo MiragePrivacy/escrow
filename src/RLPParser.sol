@@ -230,11 +230,7 @@ library RLPParser {
      * @return value The scalar, right-aligned in a bytes32
      * @return contentEnd Offset one past the item (== next item offset)
      */
-    function readScalar(bytes calldata data, uint256 offset)
-        internal
-        pure
-        returns (bytes32 value, uint256 contentEnd)
-    {
+    function readScalar(bytes calldata data, uint256 offset) internal pure returns (bytes32 value, uint256 contentEnd) {
         (uint256 start, uint256 end) = itemBounds(data, offset);
         uint256 len = end - start;
         if (len > 32) revert RLPOffsetOutOfBounds();

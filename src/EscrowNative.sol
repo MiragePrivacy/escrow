@@ -54,18 +54,18 @@ contract EscrowNative is EscrowBase {
         funded = true;
     }
 
-    function bond() external payable {
-        // If deadline passed and someone is bonded, add their bond to reward
-        _handleExpiredBond();
+    // Validates a native ETH transfer by proving both transaction inclusion (for to/value)
+    // and receipt inclusion (status == 1), then enforces the execution signature: the
+    // recovered transfer sender must have authorized payoutAddress. No bond, no claim --
+    // the signature is what gates who directs the payout.
+    function collect(
+        NativeTransferProof calldata proof,
+        uint256 targetBlockNumber,
+        address payoutAddress,
+        bytes calldata executionSig
+    ) external {
+        if (collected) revert AlreadyCollected();
 
-        _validateBondRequirements(msg.value);
-
-        _setBondData(msg.value);
-    }
-
-    // Validates native ETH transfer by proving both transaction inclusion (for to/value)
-    // and receipt inclusion (for status == 1, i.e., successful execution)
-    function collect(NativeTransferProof calldata proof, uint256 targetBlockNumber) external {
         _validateBlockHeader(proof.blockHeader, targetBlockNumber);
 
         // Verify transaction inclusion in transactions trie
@@ -88,25 +88,26 @@ contract EscrowNative is EscrowBase {
             revert InvalidNativeTransfer();
         }
 
-        _payout();
+        // Bind the payout to the transfer sender's authorization.
+        _validateExecutionSig(payoutAddress, ReceiptValidator.recoverTxSender(proof.transactionRlp), executionSig);
+
+        _payout(payoutAddress);
     }
 
-    function _payout() internal {
+    function _payout(address payoutAddress) internal {
         uint256 payout = _calculatePayout();
-        address executor = bondedExecutor;
 
         _clearPayoutState();
 
-        (bool success,) = executor.call{value: payout}("");
+        (bool success,) = payoutAddress.call{value: payout}("");
         if (!success) revert ETHTransferFailed();
     }
 
-    /// @notice Cancel and withdraw funds in a single transaction.
-    /// Reverts if a node has already bonded.
+    /// @notice Cancel and withdraw funds in a single transaction. Deployer only,
+    /// and only while the escrow has not been collected.
     function cancelAndWithdraw() external {
-        cancellationRequest = true;
+        if (collected) revert AlreadyCollected();
         _validateWithdraw();
-        _tryResetBondData();
 
         uint256 withdrawableAmount = _calculateWithdrawableAmount();
 

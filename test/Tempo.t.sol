@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.30;
 
-import {Test, console} from "forge-std/Test.sol";
-import {EscrowERC20, IERC20} from "../src/EscrowERC20.sol";
+import {Test} from "forge-std/Test.sol";
 import {ReceiptValidator} from "../src/ReceiptValidator.sol";
+import {MPTVerifier} from "../src/MPTVerifier.sol";
+import {BlockHeaderParser} from "../src/BlockHeaderParser.sol";
 
 contract ReceiptValidatorWrapper {
     function validateTransferInReceipt(
@@ -16,6 +17,22 @@ contract ReceiptValidatorWrapper {
         return ReceiptValidator.validateTransferInReceipt(
             receiptRlp, logIndex, tokenContract, toAddress, expectedAmount
         );
+    }
+
+    function extractTransferFrom(bytes calldata receiptRlp, uint256 logIndex) external pure returns (address) {
+        return ReceiptValidator.extractTransferFrom(receiptRlp, logIndex);
+    }
+
+    function verifyReceiptProof(bytes calldata receiptRlp, bytes calldata proofNodes, bytes calldata path, bytes32 root)
+        external
+        pure
+        returns (bool)
+    {
+        return MPTVerifier.verifyReceiptProof(receiptRlp, proofNodes, path, root);
+    }
+
+    function extractReceiptsRoot(bytes calldata header) external view returns (bytes32) {
+        return BlockHeaderParser.extractReceiptsRoot(header);
     }
 }
 
@@ -93,32 +110,12 @@ contract TempoTest is Test {
         validator.validateTransferInReceipt(RECEIPT_RLP, 0, address(0xbeef), TO_ADDRESS, AMOUNT);
     }
 
-    function testEndToEndProof() public {
-        address deployer = makeAddr("deployer");
-
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
-
-        vm.prank(deployer);
-        EscrowERC20 escrow = new EscrowERC20(TOKEN, TO_ADDRESS, AMOUNT, 500e18, 500e18);
-
-        vm.prank(FROM_ADDRESS);
-        escrow.bond(250e18);
-
-        vm.roll(BLOCK_NUMBER + 10);
-        vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
-
-        vm.prank(FROM_ADDRESS);
-        escrow.collect(
-            EscrowERC20.ReceiptProof({
-                blockHeader: BLOCK_HEADER,
-                receiptRlp: RECEIPT_RLP,
-                proofNodes: PROOF_NODES,
-                receiptPath: RECEIPT_PATH,
-                logIndex: 0
-            }),
-            BLOCK_NUMBER
-        );
+    // Verifies the Tempo (type 0x76) receipt is included under the block's receipts root
+    // and the Transfer event `from` topic is extractable -- the proof-library half of a
+    // collect, without the execution signature (whose key we do not control here).
+    function testReceiptProofAndFrom() public view {
+        bytes32 receiptsRoot = validator.extractReceiptsRoot(BLOCK_HEADER);
+        assertTrue(validator.verifyReceiptProof(RECEIPT_RLP, PROOF_NODES, RECEIPT_PATH, receiptsRoot));
+        assertEq(validator.extractTransferFrom(RECEIPT_RLP, 0), FROM_ADDRESS);
     }
 }
