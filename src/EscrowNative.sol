@@ -9,11 +9,13 @@ contract EscrowNative is EscrowBase {
     error AlreadyFunded();
     error ZeroRewardAmount();
     error ZeroPaymentAmount();
+    error ZeroBondAmount();
     error InvalidTxProof();
     error InvalidReceiptProof();
     error TxFailed();
     error InvalidNativeTransfer();
     error ETHTransferFailed();
+    error BondTransferFailed();
     error NoWithdrawableFunds();
 
     // Proof structure for native ETH transfers (requires both tx and receipt)
@@ -29,42 +31,58 @@ contract EscrowNative is EscrowBase {
     constructor(
         address _expectedRecipient,
         uint256 _expectedAmount,
+        address _blindedSigner,
         uint256 _currentRewardAmount,
-        uint256 _currentPaymentAmount
-    ) payable EscrowBase(_expectedRecipient, _expectedAmount) {
+        uint256 _currentPaymentAmount,
+        uint256 _bondAmount
+    ) payable EscrowBase(_expectedRecipient, _expectedAmount, _blindedSigner) {
         if (_currentRewardAmount > 0 && _currentPaymentAmount > 0) {
-            if (msg.value != _currentRewardAmount + _currentPaymentAmount) revert IncorrectETHAmount();
+            if (_bondAmount == 0) revert ZeroBondAmount();
+            if (msg.value != _currentRewardAmount + _currentPaymentAmount + _bondAmount) revert IncorrectETHAmount();
             currentRewardAmount = _currentRewardAmount;
             originalRewardAmount = _currentRewardAmount;
             currentPaymentAmount = _currentPaymentAmount;
+            bondPot = _bondAmount;
             funded = true;
         }
     }
 
-    function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) external payable {
+    function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount, uint256 _bondAmount) external payable {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (funded) revert AlreadyFunded();
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
         if (_currentPaymentAmount == 0) revert ZeroPaymentAmount();
-        if (msg.value != _currentRewardAmount + _currentPaymentAmount) revert IncorrectETHAmount();
+        if (_bondAmount == 0) revert ZeroBondAmount();
+        if (msg.value != _currentRewardAmount + _currentPaymentAmount + _bondAmount) revert IncorrectETHAmount();
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
         currentPaymentAmount = _currentPaymentAmount;
+        bondPot = _bondAmount;
         funded = true;
     }
 
-    function bond() external payable {
-        // If deadline passed and someone is bonded, add their bond to reward
-        _handleExpiredBond();
+    // Locks the escrow to the calling fresh EOA and pays it the ETH bond pot to bootstrap
+    // its gas. Gated by the ECDH signature: bondSig must recover to blindedSigner. The bond
+    // ETH leaving the escrow lets the caller repay the block builder in the same bundle.
+    function bond(bytes calldata bondSig) external {
+        // A prior expired bond frees the lock for this fresh enclave.
+        _clearExpiredBond();
 
-        _validateBondRequirements(msg.value);
+        _validateBond(bondSig);
 
-        _setBondData(msg.value);
+        _setBondData();
+
+        uint256 pot = bondPot;
+        bondPot = 0;
+        (bool success,) = msg.sender.call{value: pot}("");
+        if (!success) revert BondTransferFailed();
     }
 
-    // Validates native ETH transfer by proving both transaction inclusion (for to/value)
-    // and receipt inclusion (for status == 1, i.e., successful execution)
+    // Validates a native ETH transfer by proving both transaction inclusion (for to/value)
+    // and receipt inclusion (status == 1), then pays the bonded executor. Gated by the
+    // OnlyBondedExecutor guard: the ECDH signature was spent at bond(), so the bonded EOA
+    // is thereafter the only caller.
     function collect(NativeTransferProof calldata proof, uint256 targetBlockNumber) external {
         _validateBlockHeader(proof.blockHeader, targetBlockNumber);
 
@@ -108,9 +126,11 @@ contract EscrowNative is EscrowBase {
         _validateWithdraw();
         _tryResetBondData();
 
-        uint256 withdrawableAmount = _calculateWithdrawableAmount();
+        // The unspent bond pot is returned together with the reward/payment.
+        uint256 withdrawableAmount = _calculateWithdrawableAmount() + bondPot;
 
         _clearWithdrawState();
+        bondPot = 0;
 
         if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 

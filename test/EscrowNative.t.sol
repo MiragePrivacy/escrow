@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.30;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {EscrowNative} from "../src/EscrowNative.sol";
 import {EscrowBase} from "../src/EscrowBase.sol";
 import {ReceiptValidator} from "../src/ReceiptValidator.sol";
+import {BondAuth} from "./helpers/BondAuth.sol";
 
 contract EscrowNativeTest is Test {
     EscrowNative public escrow;
@@ -13,27 +14,44 @@ contract EscrowNativeTest is Test {
     address public recipient;
     address public other;
 
+    // The "enclave" whose blinded key gates bonding. blindedSigner = enclave.addr.
+    Vm.Wallet enclave;
+
     uint256 constant EXPECTED_AMOUNT = 1 ether;
     uint256 constant REWARD_AMOUNT = 0.5 ether;
     uint256 constant PAYMENT_AMOUNT = 0.5 ether;
-    uint256 constant BOND_AMOUNT = 0.25 ether; // Half of reward amount
+    uint256 constant BOND_POT = 0.25 ether;
+    uint256 constant TOTAL = REWARD_AMOUNT + PAYMENT_AMOUNT + BOND_POT;
 
     function setUp() public {
         deployer = makeAddr("deployer");
         executor = makeAddr("executor");
         recipient = makeAddr("recipient");
         other = makeAddr("other");
+        enclave = vm.createWallet("enclave");
 
-        // Give everyone some ETH
         vm.deal(deployer, 100 ether);
         vm.deal(executor, 100 ether);
         vm.deal(other, 100 ether);
 
-        // Deploy escrow with native ETH funding in constructor
         vm.prank(deployer);
-        escrow = new EscrowNative{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(
-            recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT
+        escrow = new EscrowNative{value: TOTAL}(
+            recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, PAYMENT_AMOUNT, BOND_POT
         );
+    }
+
+    function _newUnfunded() internal returns (EscrowNative) {
+        vm.prank(deployer);
+        return new EscrowNative(recipient, EXPECTED_AMOUNT, enclave.addr, 0, 0, 0);
+    }
+
+    function _sig(address escrowAddr, address bondingExecutor) internal view returns (bytes memory) {
+        return BondAuth.sign(vm, enclave.privateKey, escrowAddr, bondingExecutor);
+    }
+
+    function _bondExecutor() internal {
+        vm.prank(executor);
+        escrow.bond(_sig(address(escrow), executor));
     }
 
     function testConstructorNative() public view {
@@ -43,91 +61,111 @@ contract EscrowNativeTest is Test {
         assertEq(escrow.funded(), true);
         assertEq(escrow.expectedRecipient(), recipient);
         assertEq(escrow.expectedAmount(), EXPECTED_AMOUNT);
-        assertEq(address(escrow).balance, REWARD_AMOUNT + PAYMENT_AMOUNT);
+        assertEq(escrow.blindedSigner(), enclave.addr);
+        assertEq(escrow.bondPot(), BOND_POT);
+        assertEq(address(escrow).balance, TOTAL);
     }
 
     function testConstructorNativeIncorrectAmount() public {
         vm.prank(deployer);
         vm.expectRevert(EscrowNative.IncorrectETHAmount.selector);
-        new EscrowNative{value: 0.5 ether}( // Wrong amount - should be 1 ether
-            recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT
+        new EscrowNative{value: 0.5 ether}( // Wrong amount - should be TOTAL
+            recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, PAYMENT_AMOUNT, BOND_POT
         );
     }
 
-    function testConstructorNativeZeroValueWithAmounts() public {
+    function testConstructorNativeZeroBond() public {
         vm.prank(deployer);
-        vm.expectRevert(EscrowNative.IncorrectETHAmount.selector);
-        new EscrowNative{value: 0}(recipient, EXPECTED_AMOUNT, REWARD_AMOUNT, PAYMENT_AMOUNT);
+        vm.expectRevert(EscrowNative.ZeroBondAmount.selector);
+        new EscrowNative{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(
+            recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, PAYMENT_AMOUNT, 0
+        );
     }
 
     function testFundNative() public {
-        vm.startPrank(deployer);
+        EscrowNative escrow2 = _newUnfunded();
 
-        // Create unfunded escrow
-        EscrowNative escrow2 = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
-
-        // Fund it separately
-        escrow2.fund{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
-        vm.stopPrank();
+        vm.prank(deployer);
+        escrow2.fund{value: TOTAL}(REWARD_AMOUNT, PAYMENT_AMOUNT, BOND_POT);
 
         assertEq(escrow2.currentRewardAmount(), REWARD_AMOUNT);
         assertEq(escrow2.originalRewardAmount(), REWARD_AMOUNT);
         assertEq(escrow2.currentPaymentAmount(), PAYMENT_AMOUNT);
         assertEq(escrow2.funded(), true);
-        assertEq(address(escrow2).balance, REWARD_AMOUNT + PAYMENT_AMOUNT);
+        assertEq(escrow2.bondPot(), BOND_POT);
+        assertEq(address(escrow2).balance, TOTAL);
     }
 
     function testFundNativeZeroReward() public {
-        vm.startPrank(deployer);
-        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
-
+        EscrowNative unfunded = _newUnfunded();
+        vm.prank(deployer);
         vm.expectRevert(EscrowNative.ZeroRewardAmount.selector);
-        unfundedEscrow.fund{value: PAYMENT_AMOUNT}(0, PAYMENT_AMOUNT);
-        vm.stopPrank();
+        unfunded.fund{value: PAYMENT_AMOUNT + BOND_POT}(0, PAYMENT_AMOUNT, BOND_POT);
+    }
+
+    function testFundNativeZeroBond() public {
+        EscrowNative unfunded = _newUnfunded();
+        vm.prank(deployer);
+        vm.expectRevert(EscrowNative.ZeroBondAmount.selector);
+        unfunded.fund{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, PAYMENT_AMOUNT, 0);
     }
 
     function testFundNativeOnlyDeployer() public {
-        vm.prank(deployer);
-        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
-
+        EscrowNative unfunded = _newUnfunded();
         vm.prank(executor);
         vm.expectRevert(EscrowBase.OnlyDeployer.selector);
-        unfundedEscrow.fund{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
+        unfunded.fund{value: TOTAL}(REWARD_AMOUNT, PAYMENT_AMOUNT, BOND_POT);
     }
 
     function testFundNativeAlreadyFunded() public {
         vm.prank(deployer);
         vm.expectRevert(EscrowNative.AlreadyFunded.selector);
-        escrow.fund{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
+        escrow.fund{value: TOTAL}(REWARD_AMOUNT, PAYMENT_AMOUNT, BOND_POT);
     }
 
     function testFundNativeIncorrectAmount() public {
-        vm.startPrank(deployer);
-        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
-
+        EscrowNative unfunded = _newUnfunded();
+        vm.prank(deployer);
         vm.expectRevert(EscrowNative.IncorrectETHAmount.selector);
-        unfundedEscrow.fund{value: 0.5 ether}(REWARD_AMOUNT, PAYMENT_AMOUNT);
-        vm.stopPrank();
+        unfunded.fund{value: 0.5 ether}(REWARD_AMOUNT, PAYMENT_AMOUNT, BOND_POT);
     }
 
+    // Bonding pays the ETH bond pot out to the fresh EOA to bootstrap its gas.
     function testBondNative() public {
-        vm.prank(executor);
-        escrow.bond{value: BOND_AMOUNT}();
+        uint256 executorBefore = executor.balance;
+
+        _bondExecutor();
 
         assertEq(escrow.bondedExecutor(), executor);
-        assertEq(escrow.bondAmount(), BOND_AMOUNT);
         assertEq(escrow.executionDeadline(), block.timestamp + 5 minutes);
         assertTrue(escrow.is_bonded());
-        assertEq(address(escrow).balance, REWARD_AMOUNT + PAYMENT_AMOUNT + BOND_AMOUNT);
+        assertEq(escrow.bondPot(), 0);
+        assertEq(address(escrow).balance, REWARD_AMOUNT + PAYMENT_AMOUNT);
+        assertEq(executor.balance, executorBefore + BOND_POT);
+    }
+
+    function testBondNativeInvalidSignature() public {
+        Vm.Wallet memory attacker = vm.createWallet("attacker");
+        bytes memory badSig = BondAuth.sign(vm, attacker.privateKey, address(escrow), executor);
+
+        vm.prank(executor);
+        vm.expectRevert(EscrowBase.InvalidBondSignature.selector);
+        escrow.bond(badSig);
+    }
+
+    function testBondNativeSignatureBoundToCaller() public {
+        bytes memory sigForExecutor = _sig(address(escrow), executor);
+
+        vm.prank(other);
+        vm.expectRevert(EscrowBase.InvalidBondSignature.selector);
+        escrow.bond(sigForExecutor);
     }
 
     function testBondNativeNotFunded() public {
-        vm.prank(deployer);
-        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
-
+        EscrowNative unfunded = _newUnfunded();
         vm.prank(executor);
         vm.expectRevert(EscrowBase.NotFunded.selector);
-        unfundedEscrow.bond{value: BOND_AMOUNT}();
+        unfunded.bond(_sig(address(unfunded), executor));
     }
 
     function testBondNativeCancellationRequested() public {
@@ -136,142 +174,79 @@ contract EscrowNativeTest is Test {
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.CancellationRequested.selector);
-        escrow.bond{value: BOND_AMOUNT}();
+        escrow.bond(_sig(address(escrow), executor));
     }
 
-    function testBondNativeInsufficientAmount() public {
-        vm.prank(executor);
-        vm.expectRevert(EscrowBase.InsufficientBond.selector);
-        escrow.bond{value: BOND_AMOUNT / 4}();
-    }
-
+    // An expired bond frees the lock; a fresh enclave-authorized EOA can bond, but the
+    // pot is already spent (one-shot faucet) so no further ETH is paid out.
     function testBondNativeAfterDeadlinePassed() public {
         _bondExecutor();
 
         vm.warp(block.timestamp + 6 minutes);
 
-        // After first bond fails, reward = 0.5 + 0.25 = 0.75, so minimum bond = 0.375
-        uint256 updatedReward = REWARD_AMOUNT + BOND_AMOUNT;
-        uint256 newBondAmount = updatedReward / 2;
-
+        uint256 otherBefore = other.balance;
         vm.prank(other);
-        escrow.bond{value: newBondAmount}();
+        escrow.bond(_sig(address(escrow), other));
 
         assertEq(escrow.bondedExecutor(), other);
-        assertEq(escrow.currentRewardAmount(), updatedReward);
-        assertEq(escrow.bondAmount(), newBondAmount);
-        assertEq(escrow.totalBondsDeposited(), BOND_AMOUNT);
+        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT);
+        assertEq(escrow.bondPot(), 0);
+        assertEq(other.balance, otherBefore); // pot already drained by first bond
     }
 
-    function testBondNativeRequiresUpdatedRewardAmount() public {
-        _bondExecutor();
-
-        vm.warp(block.timestamp + 6 minutes);
-
-        uint256 updatedReward = REWARD_AMOUNT + BOND_AMOUNT;
-        uint256 minimumRequiredBond = updatedReward / 2;
-
-        vm.startPrank(other);
-
-        vm.expectRevert(EscrowBase.InsufficientBond.selector);
-        escrow.bond{value: BOND_AMOUNT}();
-
-        escrow.bond{value: minimumRequiredBond}();
-        vm.stopPrank();
-
-        assertEq(escrow.currentRewardAmount(), updatedReward);
-        assertEq(escrow.bondAmount(), minimumRequiredBond);
-        assertEq(escrow.bondedExecutor(), other);
-        assertEq(escrow.totalBondsDeposited(), BOND_AMOUNT);
+    function _dummyProof() internal pure returns (EscrowNative.NativeTransferProof memory) {
+        return EscrowNative.NativeTransferProof({
+            blockHeader: hex"",
+            transactionRlp: hex"",
+            txProofNodes: hex"",
+            receiptRlp: hex"",
+            receiptProofNodes: hex"",
+            path: hex""
+        });
     }
 
     function testCollectNativeRequiresProof() public {
         _bondExecutor();
-
-        EscrowNative.NativeTransferProof memory dummyProof = EscrowNative.NativeTransferProof({
-            blockHeader: hex"",
-            transactionRlp: hex"",
-            txProofNodes: hex"",
-            receiptRlp: hex"",
-            receiptProofNodes: hex"",
-            path: hex""
-        });
-
         vm.prank(executor);
         vm.expectRevert();
-        escrow.collect(dummyProof, block.number - 1);
+        escrow.collect(_dummyProof(), block.number - 1);
     }
 
     function testCollectNativeNotFunded() public {
-        vm.prank(deployer);
-        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
-
-        EscrowNative.NativeTransferProof memory dummyProof = EscrowNative.NativeTransferProof({
-            blockHeader: hex"",
-            transactionRlp: hex"",
-            txProofNodes: hex"",
-            receiptRlp: hex"",
-            receiptProofNodes: hex"",
-            path: hex""
-        });
-
+        EscrowNative unfunded = _newUnfunded();
         vm.prank(executor);
         vm.expectRevert(EscrowBase.NotFunded.selector);
-        unfundedEscrow.collect(dummyProof, block.number - 1);
+        unfunded.collect(_dummyProof(), block.number - 1);
     }
 
     function testCollectNativeNotBondedExecutor() public {
         _bondExecutor();
-
-        EscrowNative.NativeTransferProof memory dummyProof = EscrowNative.NativeTransferProof({
-            blockHeader: hex"",
-            transactionRlp: hex"",
-            txProofNodes: hex"",
-            receiptRlp: hex"",
-            receiptProofNodes: hex"",
-            path: hex""
-        });
-
         vm.prank(other);
         vm.expectRevert(EscrowBase.OnlyBondedExecutor.selector);
-        escrow.collect(dummyProof, block.number - 1);
+        escrow.collect(_dummyProof(), block.number - 1);
     }
 
     function testCollectNativeAfterDeadline() public {
         _bondExecutor();
-
         vm.warp(block.timestamp + 6 minutes);
-
-        EscrowNative.NativeTransferProof memory dummyProof = EscrowNative.NativeTransferProof({
-            blockHeader: hex"",
-            transactionRlp: hex"",
-            txProofNodes: hex"",
-            receiptRlp: hex"",
-            receiptProofNodes: hex"",
-            path: hex""
-        });
-
         vm.prank(executor);
         vm.expectRevert(EscrowBase.OnlyBondedExecutor.selector);
-        escrow.collect(dummyProof, block.number - 1);
+        escrow.collect(_dummyProof(), block.number - 1);
     }
 
     function testIsBondedNative() public {
         assertFalse(escrow.is_bonded());
-
         _bondExecutor();
         assertTrue(escrow.is_bonded());
-
         vm.warp(block.timestamp + 6 minutes);
         assertFalse(escrow.is_bonded());
     }
 
     function testDoubleBondingPreventedNative() public {
         _bondExecutor();
-
         vm.prank(other);
         vm.expectRevert(EscrowBase.ExecutorAlreadyBonded.selector);
-        escrow.bond{value: BOND_AMOUNT}();
+        escrow.bond(_sig(address(escrow), other));
     }
 
     function testBondNativeAfterFirstExecutorStillActive() public {
@@ -282,33 +257,14 @@ contract EscrowNativeTest is Test {
 
         vm.prank(other);
         vm.expectRevert(EscrowBase.ExecutorAlreadyBonded.selector);
-        escrow.bond{value: BOND_AMOUNT}();
+        escrow.bond(_sig(address(escrow), other));
 
         assertEq(escrow.bondedExecutor(), executor);
-    }
-
-    function testMultipleBondCyclesNative() public {
-        vm.prank(executor);
-        escrow.bond{value: BOND_AMOUNT}();
-
-        vm.warp(block.timestamp + 6 minutes);
-
-        // After first bond fails, reward = 0.5 + 0.25 = 0.75, so minimum bond = 0.375
-        uint256 updatedReward = REWARD_AMOUNT + BOND_AMOUNT;
-        uint256 newBondAmount = updatedReward / 2;
-
-        vm.prank(other);
-        escrow.bond{value: newBondAmount}();
-
-        assertEq(escrow.bondedExecutor(), other);
-        assertEq(escrow.currentRewardAmount(), updatedReward);
-        assertEq(escrow.bondAmount(), newBondAmount);
     }
 
     function testRequestCancellationNative() public {
         vm.prank(deployer);
         escrow.requestCancellation();
-
         assertTrue(escrow.cancellationRequest());
     }
 
@@ -316,7 +272,6 @@ contract EscrowNativeTest is Test {
         vm.startPrank(deployer);
         escrow.requestCancellation();
         assertTrue(escrow.cancellationRequest());
-
         escrow.resume();
         assertFalse(escrow.cancellationRequest());
         vm.stopPrank();
@@ -324,6 +279,7 @@ contract EscrowNativeTest is Test {
 
     // --- cancelAndWithdraw tests ---
 
+    // Withdraw returns reward + payment + the unspent ETH bond pot.
     function testCancelAndWithdrawNative() public {
         uint256 initialBalance = deployer.balance;
 
@@ -334,7 +290,8 @@ contract EscrowNativeTest is Test {
         assertFalse(escrow.funded());
         assertEq(escrow.currentPaymentAmount(), 0);
         assertEq(escrow.currentRewardAmount(), 0);
-        assertEq(deployer.balance, initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+        assertEq(escrow.bondPot(), 0);
+        assertEq(deployer.balance, initialBalance + TOTAL);
     }
 
     function testCancelAndWithdrawNativeOnlyDeployer() public {
@@ -344,25 +301,22 @@ contract EscrowNativeTest is Test {
     }
 
     function testCancelAndWithdrawNativeNotFunded() public {
-        vm.prank(deployer);
-        EscrowNative unfundedEscrow = new EscrowNative(recipient, EXPECTED_AMOUNT, 0, 0);
-
+        EscrowNative unfunded = _newUnfunded();
         vm.prank(deployer);
         vm.expectRevert(EscrowBase.NotFunded.selector);
-        unfundedEscrow.cancelAndWithdraw();
+        unfunded.cancelAndWithdraw();
     }
 
     function testCancelAndWithdrawNativeWhileBonded() public {
         _bondExecutor();
-
         vm.prank(deployer);
         vm.expectRevert(EscrowBase.BondActive.selector);
         escrow.cancelAndWithdraw();
     }
 
+    // After a bond expires, the pot is already spent, so only reward + payment is returned.
     function testCancelAndWithdrawNativeAfterBondExpired() public {
         _bondExecutor();
-
         vm.warp(block.timestamp + 6 minutes);
 
         uint256 initialBalance = deployer.balance;
@@ -373,6 +327,7 @@ contract EscrowNativeTest is Test {
         assertTrue(escrow.cancellationRequest());
         assertFalse(escrow.funded());
         assertEq(deployer.balance, initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
+        assertEq(address(escrow).balance, 0);
     }
 
     function testCancelAndWithdrawNativePreventsRaceCondition() public {
@@ -381,7 +336,7 @@ contract EscrowNativeTest is Test {
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.NotFunded.selector);
-        escrow.bond{value: BOND_AMOUNT}();
+        escrow.bond(_sig(address(escrow), executor));
     }
 
     function testCancelAndWithdrawNativeAlreadyCancelled() public {
@@ -395,35 +350,11 @@ contract EscrowNativeTest is Test {
 
         assertTrue(escrow.cancellationRequest());
         assertFalse(escrow.funded());
-        assertEq(deployer.balance, initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
-    }
-
-    function testCancelAndWithdrawNativeAfterCollectingBonds() public {
-        uint256 startTime = block.timestamp;
-
-        vm.prank(executor);
-        escrow.bond{value: BOND_AMOUNT}();
-
-        vm.warp(startTime + 6 minutes);
-
-        uint256 initialBalance = deployer.balance;
-
-        vm.prank(deployer);
-        escrow.cancelAndWithdraw();
-
-        assertEq(deployer.balance, initialBalance + REWARD_AMOUNT + PAYMENT_AMOUNT);
-        assertEq(address(escrow).balance, BOND_AMOUNT);
-    }
-
-    function _bondExecutor() internal {
-        vm.prank(executor);
-        escrow.bond{value: BOND_AMOUNT}();
+        assertEq(deployer.balance, initialBalance + TOTAL);
     }
 }
 
 // Helper contract to test ReceiptValidator with calldata
-// ReceiptValidator is already imported below for the wrapper
-
 contract ReceiptValidatorWrapper {
     function validateReceiptStatus(bytes calldata receiptRlp) external pure returns (bool) {
         return ReceiptValidator.validateReceiptStatus(receiptRlp);
@@ -439,32 +370,24 @@ contract ReceiptValidatorTest is Test {
 
     // Test that successful transaction receipt (status = 1) passes validation
     function testValidateReceiptStatusSuccess() public view {
-        // EIP-1559 receipt with status = 1: type(02) + rlp([status=01, cumulativeGasUsed, logsBloom, logs])
-        // Real receipt from Proof.t.sol - this has status=0x01 (success)
         bytes memory successReceipt =
             hex"02f901a801840114e0a3b9010000000000000000000000000000000880000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000010000000000000200000000000004000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000001000000000000000000000000000f89df89b94be41a9ec942d5b52be07cc7f4d7e30e10e9b652af863a0ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3efa0000000000000000000000000e1a9d9c9abb872ddef70a4d108fd8fc3c7ce4dc4a0000000000000000000000000658d9c76ff358984d6436ea11ee1eda08894c818a000000000000000000000000000000000000000000000000000000000017d7840";
 
-        // Should not revert - status byte after list prefix is 0x01 (success)
         bool result = wrapper.validateReceiptStatus(successReceipt);
         assertTrue(result);
     }
 
     // Test that failed transaction receipt (status = 0) fails validation
     function testValidateReceiptStatusFailure() public {
-        // Same receipt but with status=0x80 (empty = 0 = failed) instead of 0x01
-        // Changed byte at position 5 (after 02 f9 01 a8) from 01 to 80
         bytes memory failedReceipt =
             hex"02f901a880840114e0a3b9010000000000000000000000000000000880000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000010000000000000200000000000004000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000001000000000000000000000000000f89df89b94be41a9ec942d5b52be07cc7f4d7e30e10e9b652af863a0ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3efa0000000000000000000000000e1a9d9c9abb872ddef70a4d108fd8fc3c7ce4dc4a0000000000000000000000000658d9c76ff358984d6436ea11ee1eda08894c818a000000000000000000000000000000000000000000000000000000000017d7840";
 
-        // Should revert with "Receipt status is not success"
         vm.expectRevert(ReceiptValidator.ReceiptStatusNotSuccess.selector);
         wrapper.validateReceiptStatus(failedReceipt);
     }
 
     // Test legacy receipt format (no type prefix)
     function testValidateReceiptStatusLegacySuccess() public view {
-        // Legacy receipt (no type prefix) with status = 1
-        // Same structure but without the 02 type prefix
         bytes memory legacySuccessReceipt =
             hex"f901a801840114e0a3b9010000000000000000000000000000000880000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000010000000000000200000000000004000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000001000000000000000000000000000f89df89b94be41a9ec942d5b52be07cc7f4d7e30e10e9b652af863a0ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3efa0000000000000000000000000e1a9d9c9abb872ddef70a4d108fd8fc3c7ce4dc4a0000000000000000000000000658d9c76ff358984d6436ea11ee1eda08894c818a000000000000000000000000000000000000000000000000000000000017d7840";
 
@@ -474,7 +397,6 @@ contract ReceiptValidatorTest is Test {
 
     // Test legacy receipt format with failed status
     function testValidateReceiptStatusLegacyFailure() public {
-        // Legacy receipt (no type prefix) with status = 0 (0x80 = empty)
         bytes memory legacyFailedReceipt =
             hex"f901a880840114e0a3b9010000000000000000000000000000000880000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000010000000000000200000000000004000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000001000000000000000000000000000f89df89b94be41a9ec942d5b52be07cc7f4d7e30e10e9b652af863a0ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3efa0000000000000000000000000e1a9d9c9abb872ddef70a4d108fd8fc3c7ce4dc4a0000000000000000000000000658d9c76ff358984d6436ea11ee1eda08894c818a000000000000000000000000000000000000000000000000000000000017d7840";
 
