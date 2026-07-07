@@ -5,6 +5,8 @@ out/
 !out/EscrowNative.sol/EscrowNative.json
 !out/EscrowERC20.sol/
 !out/EscrowERC20.sol/EscrowERC20.json
+!out/EscrowBatch.sol/
+!out/EscrowBatch.sol/EscrowBatch.json
 
 # Ignores development broadcast logs
 !/broadcast
