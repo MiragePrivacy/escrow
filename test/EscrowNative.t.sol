@@ -19,7 +19,7 @@ contract EscrowNativeTest is Test {
 
     uint256 constant EXPECTED_AMOUNT = 1 ether;
     uint256 constant REWARD_AMOUNT = 0.5 ether;
-    uint256 constant PAYMENT_AMOUNT = 0.5 ether;
+    uint256 constant PAYMENT_AMOUNT = EXPECTED_AMOUNT;
     uint256 constant BOND_POT = 0.25 ether;
     uint256 constant TOTAL = REWARD_AMOUNT + PAYMENT_AMOUNT + BOND_POT;
 
@@ -36,13 +36,13 @@ contract EscrowNativeTest is Test {
 
         vm.prank(deployer);
         escrow = new EscrowNative{value: TOTAL}(
-            recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, PAYMENT_AMOUNT, BOND_POT
+            recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, BOND_POT
         );
     }
 
     function _newUnfunded() internal returns (EscrowNative) {
         vm.prank(deployer);
-        return new EscrowNative(recipient, EXPECTED_AMOUNT, enclave.addr, 0, 0, 0);
+        return new EscrowNative(recipient, EXPECTED_AMOUNT, enclave.addr, 0, 0);
     }
 
     function _sig(address escrowAddr, address bondingExecutor) internal view returns (bytes memory) {
@@ -66,11 +66,26 @@ contract EscrowNativeTest is Test {
         assertEq(address(escrow).balance, TOTAL);
     }
 
+    // The domain separator must match the EIP-712 encoding byte-for-byte, or the
+    // off-chain enclave signer recovers to a different address and bond() reverts.
+    function testDomainSeparatorMatchesEip712() public view {
+        bytes32 expected = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256("MirageEscrow"),
+                keccak256("1"),
+                block.chainid,
+                address(escrow)
+            )
+        );
+        assertEq(escrow.domainSeparator(), expected);
+    }
+
     function testConstructorNativeIncorrectAmount() public {
         vm.prank(deployer);
         vm.expectRevert(EscrowNative.IncorrectETHAmount.selector);
         new EscrowNative{value: 0.5 ether}( // Wrong amount - should be TOTAL
-            recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, PAYMENT_AMOUNT, BOND_POT
+            recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, BOND_POT
         );
     }
 
@@ -78,7 +93,7 @@ contract EscrowNativeTest is Test {
         vm.prank(deployer);
         vm.expectRevert(EscrowNative.ZeroBondAmount.selector);
         new EscrowNative{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(
-            recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, PAYMENT_AMOUNT, 0
+            recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, 0
         );
     }
 
@@ -86,7 +101,7 @@ contract EscrowNativeTest is Test {
         EscrowNative escrow2 = _newUnfunded();
 
         vm.prank(deployer);
-        escrow2.fund{value: TOTAL}(REWARD_AMOUNT, PAYMENT_AMOUNT, BOND_POT);
+        escrow2.fund{value: TOTAL}(REWARD_AMOUNT, BOND_POT);
 
         assertEq(escrow2.currentRewardAmount(), REWARD_AMOUNT);
         assertEq(escrow2.originalRewardAmount(), REWARD_AMOUNT);
@@ -100,34 +115,34 @@ contract EscrowNativeTest is Test {
         EscrowNative unfunded = _newUnfunded();
         vm.prank(deployer);
         vm.expectRevert(EscrowNative.ZeroRewardAmount.selector);
-        unfunded.fund{value: PAYMENT_AMOUNT + BOND_POT}(0, PAYMENT_AMOUNT, BOND_POT);
+        unfunded.fund{value: PAYMENT_AMOUNT + BOND_POT}(0, BOND_POT);
     }
 
     function testFundNativeZeroBond() public {
         EscrowNative unfunded = _newUnfunded();
         vm.prank(deployer);
         vm.expectRevert(EscrowNative.ZeroBondAmount.selector);
-        unfunded.fund{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, PAYMENT_AMOUNT, 0);
+        unfunded.fund{value: REWARD_AMOUNT + PAYMENT_AMOUNT}(REWARD_AMOUNT, 0);
     }
 
     function testFundNativeOnlyDeployer() public {
         EscrowNative unfunded = _newUnfunded();
         vm.prank(executor);
         vm.expectRevert(EscrowBase.OnlyDeployer.selector);
-        unfunded.fund{value: TOTAL}(REWARD_AMOUNT, PAYMENT_AMOUNT, BOND_POT);
+        unfunded.fund{value: TOTAL}(REWARD_AMOUNT, BOND_POT);
     }
 
     function testFundNativeAlreadyFunded() public {
         vm.prank(deployer);
         vm.expectRevert(EscrowNative.AlreadyFunded.selector);
-        escrow.fund{value: TOTAL}(REWARD_AMOUNT, PAYMENT_AMOUNT, BOND_POT);
+        escrow.fund{value: TOTAL}(REWARD_AMOUNT, BOND_POT);
     }
 
     function testFundNativeIncorrectAmount() public {
         EscrowNative unfunded = _newUnfunded();
         vm.prank(deployer);
         vm.expectRevert(EscrowNative.IncorrectETHAmount.selector);
-        unfunded.fund{value: 0.5 ether}(REWARD_AMOUNT, PAYMENT_AMOUNT, BOND_POT);
+        unfunded.fund{value: 0.5 ether}(REWARD_AMOUNT, BOND_POT);
     }
 
     // Bonding pays the ETH bond pot out to the fresh EOA to bootstrap its gas.

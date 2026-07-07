@@ -53,7 +53,7 @@ contract EscrowERC20Test is Test {
 
     uint256 constant EXPECTED_AMOUNT = 1000e18;
     uint256 constant REWARD_AMOUNT = 500e18;
-    uint256 constant PAYMENT_AMOUNT = 500e18;
+    uint256 constant PAYMENT_AMOUNT = EXPECTED_AMOUNT;
     uint256 constant BOND_POT = 0.25 ether;
 
     function setUp() public {
@@ -73,7 +73,7 @@ contract EscrowERC20Test is Test {
         token.approve(futureEscrow, REWARD_AMOUNT + PAYMENT_AMOUNT);
 
         escrow = new EscrowERC20{value: BOND_POT}(
-            address(token), recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, PAYMENT_AMOUNT
+            address(token), recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT
         );
         vm.stopPrank();
     }
@@ -81,7 +81,7 @@ contract EscrowERC20Test is Test {
     // Deploys an unfunded escrow (constructor defers fund()).
     function _newUnfunded() internal returns (EscrowERC20) {
         vm.prank(deployer);
-        return new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, enclave.addr, 0, 0);
+        return new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, enclave.addr, 0);
     }
 
     // Signs a valid BondAuth for `bondingExecutor` against `escrowAddr`.
@@ -112,10 +112,10 @@ contract EscrowERC20Test is Test {
         address futureEscrow2 = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow2, REWARD_AMOUNT + PAYMENT_AMOUNT);
 
-        EscrowERC20 escrow2 = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, enclave.addr, 0, 0);
+        EscrowERC20 escrow2 = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, enclave.addr, 0);
 
         token.approve(address(escrow2), REWARD_AMOUNT + PAYMENT_AMOUNT);
-        escrow2.fund{value: BOND_POT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
+        escrow2.fund{value: BOND_POT}(REWARD_AMOUNT);
         vm.stopPrank();
 
         assertEq(escrow2.currentRewardAmount(), REWARD_AMOUNT);
@@ -132,7 +132,7 @@ contract EscrowERC20Test is Test {
         vm.startPrank(deployer);
         token.approve(address(unfunded), PAYMENT_AMOUNT);
         vm.expectRevert(EscrowERC20.ZeroRewardAmount.selector);
-        unfunded.fund{value: BOND_POT}(0, PAYMENT_AMOUNT);
+        unfunded.fund{value: BOND_POT}(0);
         vm.stopPrank();
     }
 
@@ -141,7 +141,7 @@ contract EscrowERC20Test is Test {
         vm.startPrank(deployer);
         token.approve(address(unfunded), REWARD_AMOUNT + PAYMENT_AMOUNT);
         vm.expectRevert(EscrowERC20.ZeroBondAmount.selector);
-        unfunded.fund{value: 0}(REWARD_AMOUNT, PAYMENT_AMOUNT);
+        unfunded.fund{value: 0}(REWARD_AMOUNT);
         vm.stopPrank();
     }
 
@@ -150,7 +150,7 @@ contract EscrowERC20Test is Test {
         vm.startPrank(executor);
         token.approve(address(escrow), REWARD_AMOUNT + PAYMENT_AMOUNT);
         vm.expectRevert(EscrowBase.OnlyDeployer.selector);
-        escrow.fund{value: BOND_POT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
+        escrow.fund{value: BOND_POT}(REWARD_AMOUNT);
         vm.stopPrank();
     }
 
@@ -158,7 +158,7 @@ contract EscrowERC20Test is Test {
         vm.startPrank(deployer);
         token.approve(address(escrow), REWARD_AMOUNT + PAYMENT_AMOUNT);
         vm.expectRevert(EscrowERC20.AlreadyFunded.selector);
-        escrow.fund{value: BOND_POT}(REWARD_AMOUNT, PAYMENT_AMOUNT);
+        escrow.fund{value: BOND_POT}(REWARD_AMOUNT);
         vm.stopPrank();
     }
 

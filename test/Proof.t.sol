@@ -47,7 +47,7 @@ contract EscrowMPTTest is Test {
     address public deployer;
     uint256 constant TRANSFER_AMOUNT = 0x17d7840; // From: logs[0].data
     uint256 constant REWARD_AMOUNT = 500e18;
-    uint256 constant PAYMENT_AMOUNT = 500e18;
+    uint256 constant PAYMENT_AMOUNT = TRANSFER_AMOUNT;
     uint256 constant BOND_POT = 0.25 ether;
 
     uint256 constant TARGET_BLOCK_NUMBER = 9084468; // From: block_number
@@ -72,7 +72,7 @@ contract EscrowMPTTest is Test {
         vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
 
         EscrowERC20 proofEscrow = new EscrowERC20{value: BOND_POT}(
-            proofTokenAddress, proofRecipient, TRANSFER_AMOUNT, enclave.addr, REWARD_AMOUNT, PAYMENT_AMOUNT
+            proofTokenAddress, proofRecipient, TRANSFER_AMOUNT, enclave.addr, REWARD_AMOUNT
         );
         vm.stopPrank();
 
@@ -133,12 +133,12 @@ contract EscrowMPTTest is Test {
             expectedAmount,
             enclave.addr,
             0, // reward - defer to fund
-            0, // payment - defer to fund
             0 // bond - defer to fund
         );
 
-        // Fund the escrow with ETH (reward + payment + bond pot)
-        proofEscrow.fund{value: 1.25 ether}(0.5 ether, 0.5 ether, 0.25 ether);
+        // Fund the escrow with ETH (reward + payment + bond pot).
+        // Payment == expectedAmount internally, so value = reward + expectedAmount + bond.
+        proofEscrow.fund{value: 0.5 ether + expectedAmount + 0.25 ether}(0.5 ether, 0.25 ether);
         vm.stopPrank();
 
         console.log("Native proof escrow address:", address(proofEscrow));

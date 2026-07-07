@@ -105,7 +105,7 @@ contract TempoTest is Test {
         Vm.Wallet memory enclave = vm.createWallet("enclave");
         vm.deal(deployer, 1 ether);
         vm.prank(deployer);
-        EscrowERC20 escrow = new EscrowERC20{value: 0.25 ether}(TOKEN, TO_ADDRESS, AMOUNT, enclave.addr, 500e18, 500e18);
+        EscrowERC20 escrow = new EscrowERC20{value: 0.25 ether}(TOKEN, TO_ADDRESS, AMOUNT, enclave.addr, 500e18);
 
         vm.prank(FROM_ADDRESS);
         escrow.bond(BondAuth.sign(vm, enclave.privateKey, address(escrow), FROM_ADDRESS));
