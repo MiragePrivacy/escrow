@@ -35,9 +35,7 @@ contract EscrowNativeTest is Test {
         vm.deal(other, 100 ether);
 
         vm.prank(deployer);
-        escrow = new EscrowNative{value: TOTAL}(
-            recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, BOND_POT
-        );
+        escrow = new EscrowNative{value: TOTAL}(recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, BOND_POT);
     }
 
     function _newUnfunded() internal returns (EscrowNative) {
