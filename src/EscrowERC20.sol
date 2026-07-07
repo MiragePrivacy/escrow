@@ -15,10 +15,8 @@ contract EscrowERC20 is EscrowBase {
     error ZeroAddress();
     error AlreadyFunded();
     error ZeroRewardAmount();
-    error ZeroPaymentAmount();
     error ZeroBondAmount();
     error TokenTransferFailed();
-    error BondTransferFailed();
     error InvalidReceiptProof();
     error InvalidTransferEvent();
     error NoWithdrawableFunds();
@@ -39,52 +37,34 @@ contract EscrowERC20 is EscrowBase {
         address _expectedRecipient,
         uint256 _expectedAmount,
         address _blindedSigner,
-        uint256 _currentRewardAmount,
-        uint256 _currentPaymentAmount
+        uint256 _currentRewardAmount
     ) payable EscrowBase(_expectedRecipient, _expectedAmount, _blindedSigner) {
         if (_tokenContract == address(0)) revert ZeroAddress();
         tokenContract = _tokenContract;
 
-        if (_currentRewardAmount > 0 && _currentPaymentAmount > 0) {
-            fund(_currentRewardAmount, _currentPaymentAmount);
+        if (_currentRewardAmount > 0) {
+            fund(_currentRewardAmount);
         }
     }
 
-    // takes currentRewardAmount + currentPaymentAmount from the deployer's balance from the
-    // tokenContract, and the ETH bond pot (msg.value) that bootstraps the fresh EOA's gas.
-    function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) public payable {
+    // takes currentRewardAmount + expectedAmount (the payment) from the deployer's balance
+    // from the tokenContract, and the ETH bond pot (msg.value) that bootstraps the fresh
+    // EOA's gas. The payment reimburses the proven delivery, so it is always expectedAmount.
+    function fund(uint256 _currentRewardAmount) public payable {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (funded) revert AlreadyFunded();
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
-        if (_currentPaymentAmount == 0) revert ZeroPaymentAmount();
         if (msg.value == 0) revert ZeroBondAmount();
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
-        currentPaymentAmount = _currentPaymentAmount;
+        currentPaymentAmount = expectedAmount;
         bondPot = msg.value;
         if (!IERC20(tokenContract).transferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount))
         {
             revert TokenTransferFailed();
         }
         funded = true;
-    }
-
-    // Locks the escrow to the calling fresh EOA and pays it the ETH bond pot to bootstrap
-    // its gas. Gated by the ECDH signature: bondSig must recover to blindedSigner. The bond
-    // ETH leaving the escrow lets the caller repay the block builder in the same bundle.
-    function bond(bytes calldata bondSig) external {
-        // A prior expired bond frees the lock for this fresh enclave.
-        _clearExpiredBond();
-
-        _validateBond(bondSig);
-
-        _setBondData();
-
-        uint256 pot = bondPot;
-        bondPot = 0;
-        (bool success,) = msg.sender.call{value: pot}("");
-        if (!success) revert BondTransferFailed();
     }
 
     // Validates a Transfer-event proof against a recent block hash and checks the Transfer

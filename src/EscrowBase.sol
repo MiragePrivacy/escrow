@@ -20,6 +20,8 @@ abstract contract EscrowBase {
     error CancellationRequested();
     error ExecutorAlreadyBonded();
     error InvalidBondSignature();
+    error BondTransferFailed();
+    error ZeroBlindedSigner();
 
     // EIP-712 typed-data constants. The domain MUST match the off-chain signer
     // (nomad `crates/types/src/contracts.rs`) byte-for-byte, otherwise the recovered
@@ -63,6 +65,9 @@ abstract contract EscrowBase {
     bool public funded; // marks if the contract has funds to pay out the executors (if unfunded, no executor is accepted)
 
     constructor(address _expectedRecipient, uint256 _expectedAmount, address _blindedSigner) {
+        // Zero can't arise from a correct P = G + s.B derivation, so it signals an
+        // upstream derivation/encoding bug; reject it like a zero token address.
+        if (_blindedSigner == address(0)) revert ZeroBlindedSigner();
         expectedRecipient = _expectedRecipient;
         expectedAmount = _expectedAmount;
         blindedSigner = _blindedSigner;
@@ -150,6 +155,24 @@ abstract contract EscrowBase {
     function _setBondData() internal {
         bondedExecutor = msg.sender;
         executionDeadline = block.timestamp + 5 minutes;
+    }
+
+    // Locks the escrow to the calling fresh EOA and pays it the ETH bond pot to bootstrap
+    // its gas. Gated by the ECDH signature: bondSig must recover to blindedSigner. The bond
+    // ETH leaving the escrow lets the caller repay the block builder in the same bundle.
+    // Asset-agnostic (the pot is always ETH), so it lives in the base for both flavors.
+    function bond(bytes calldata bondSig) external {
+        // A prior expired bond frees the lock for this fresh enclave.
+        _clearExpiredBond();
+
+        _validateBond(bondSig);
+
+        _setBondData();
+
+        uint256 pot = bondPot;
+        bondPot = 0;
+        (bool success,) = msg.sender.call{value: pot}("");
+        if (!success) revert BondTransferFailed();
     }
 
     // Internal helper to clear payout state

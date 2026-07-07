@@ -8,14 +8,12 @@ contract EscrowNative is EscrowBase {
     error IncorrectETHAmount();
     error AlreadyFunded();
     error ZeroRewardAmount();
-    error ZeroPaymentAmount();
     error ZeroBondAmount();
     error InvalidTxProof();
     error InvalidReceiptProof();
     error TxFailed();
     error InvalidNativeTransfer();
     error ETHTransferFailed();
-    error BondTransferFailed();
     error NoWithdrawableFunds();
 
     // Proof structure for native ETH transfers (requires both tx and receipt)
@@ -33,50 +31,33 @@ contract EscrowNative is EscrowBase {
         uint256 _expectedAmount,
         address _blindedSigner,
         uint256 _currentRewardAmount,
-        uint256 _currentPaymentAmount,
         uint256 _bondAmount
     ) payable EscrowBase(_expectedRecipient, _expectedAmount, _blindedSigner) {
-        if (_currentRewardAmount > 0 && _currentPaymentAmount > 0) {
+        // The payment reimburses the proven delivery, so it is always the escrow's
+        // expectedAmount; it is not an independent deploy parameter.
+        if (_currentRewardAmount > 0) {
             if (_bondAmount == 0) revert ZeroBondAmount();
-            if (msg.value != _currentRewardAmount + _currentPaymentAmount + _bondAmount) revert IncorrectETHAmount();
+            if (msg.value != _currentRewardAmount + _expectedAmount + _bondAmount) revert IncorrectETHAmount();
             currentRewardAmount = _currentRewardAmount;
             originalRewardAmount = _currentRewardAmount;
-            currentPaymentAmount = _currentPaymentAmount;
+            currentPaymentAmount = _expectedAmount;
             bondPot = _bondAmount;
             funded = true;
         }
     }
 
-    function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount, uint256 _bondAmount) external payable {
+    function fund(uint256 _currentRewardAmount, uint256 _bondAmount) external payable {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (funded) revert AlreadyFunded();
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
-        if (_currentPaymentAmount == 0) revert ZeroPaymentAmount();
         if (_bondAmount == 0) revert ZeroBondAmount();
-        if (msg.value != _currentRewardAmount + _currentPaymentAmount + _bondAmount) revert IncorrectETHAmount();
+        if (msg.value != _currentRewardAmount + expectedAmount + _bondAmount) revert IncorrectETHAmount();
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
-        currentPaymentAmount = _currentPaymentAmount;
+        currentPaymentAmount = expectedAmount;
         bondPot = _bondAmount;
         funded = true;
-    }
-
-    // Locks the escrow to the calling fresh EOA and pays it the ETH bond pot to bootstrap
-    // its gas. Gated by the ECDH signature: bondSig must recover to blindedSigner. The bond
-    // ETH leaving the escrow lets the caller repay the block builder in the same bundle.
-    function bond(bytes calldata bondSig) external {
-        // A prior expired bond frees the lock for this fresh enclave.
-        _clearExpiredBond();
-
-        _validateBond(bondSig);
-
-        _setBondData();
-
-        uint256 pot = bondPot;
-        bondPot = 0;
-        (bool success,) = msg.sender.call{value: pot}("");
-        if (!success) revert BondTransferFailed();
     }
 
     // Validates a native ETH transfer by proving both transaction inclusion (for to/value)

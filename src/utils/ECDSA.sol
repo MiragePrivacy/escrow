@@ -2,6 +2,7 @@
 // Vendored from OpenZeppelin Contracts v5.1.0 (utils/cryptography/ECDSA.sol),
 // trimmed to the recover/tryRecover paths used by the escrow. Unused variants
 // (bytes32 r/vs, toEthSignedMessageHash helpers) are omitted.
+// Source: https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v5.1.0/contracts/utils/cryptography/ECDSA.sol
 pragma solidity ^0.8.20;
 
 /**
