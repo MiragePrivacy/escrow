@@ -15,7 +15,7 @@ contract EscrowERC20 is EscrowBase {
     error ZeroAddress();
     error AlreadyFunded();
     error ZeroRewardAmount();
-    error ZeroPaymentAmount();
+    error ZeroBondAmount();
     error TokenTransferFailed();
     error InvalidReceiptProof();
     error InvalidTransferEvent();
@@ -36,27 +36,30 @@ contract EscrowERC20 is EscrowBase {
         address _tokenContract,
         address _expectedRecipient,
         uint256 _expectedAmount,
-        uint256 _currentRewardAmount,
-        uint256 _currentPaymentAmount
-    ) EscrowBase(_expectedRecipient, _expectedAmount) {
+        address _blindedSigner,
+        uint256 _currentRewardAmount
+    ) payable EscrowBase(_expectedRecipient, _expectedAmount, _blindedSigner) {
         if (_tokenContract == address(0)) revert ZeroAddress();
         tokenContract = _tokenContract;
 
-        if (_currentRewardAmount > 0 && _currentPaymentAmount > 0) {
-            fund(_currentRewardAmount, _currentPaymentAmount);
+        if (_currentRewardAmount > 0) {
+            fund(_currentRewardAmount);
         }
     }
 
-    // takes currentRewardAmount + currentPaymentAmount from the deployer's balance from the tokenContract.
-    function fund(uint256 _currentRewardAmount, uint256 _currentPaymentAmount) public {
+    // takes currentRewardAmount + expectedAmount (the payment) from the deployer's balance
+    // from the tokenContract, and the ETH bond pot (msg.value) that bootstraps the fresh
+    // EOA's gas. The payment reimburses the proven delivery, so it is always expectedAmount.
+    function fund(uint256 _currentRewardAmount) public payable {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (funded) revert AlreadyFunded();
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
-        if (_currentPaymentAmount == 0) revert ZeroPaymentAmount();
+        if (msg.value == 0) revert ZeroBondAmount();
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
-        currentPaymentAmount = _currentPaymentAmount;
+        currentPaymentAmount = expectedAmount;
+        bondPot = msg.value;
         if (!IERC20(tokenContract).transferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount))
         {
             revert TokenTransferFailed();
@@ -64,21 +67,9 @@ contract EscrowERC20 is EscrowBase {
         funded = true;
     }
 
-    // takes _bondAmount from the caller's balance of the tokenContract. The bondstatus is now bonded, execution deadline is current block timestamp + 5 minutes. Sets bondedexecutor to the caller. Will only accept a bond if the cancellationrequest is set to false, and no one is bonded.
-    function bond(uint256 _bondAmount) external {
-        // If deadline passed and someone is bonded, add their bond to reward
-        _handleExpiredBond();
-
-        _validateBondRequirements(_bondAmount);
-
-        if (!IERC20(tokenContract).transferFrom(msg.sender, address(this), _bondAmount)) {
-            revert TokenTransferFailed();
-        }
-
-        _setBondData(_bondAmount);
-    }
-
-    // Validates a given merkle proof against a recent block hash and checks the Transfer event's contents
+    // Validates a Transfer-event proof against a recent block hash and checks the Transfer
+    // event's contents, then pays the bonded executor. Gated by the OnlyBondedExecutor guard:
+    // the ECDH signature was spent at bond(), so the bonded EOA is thereafter the only caller.
     function collect(ReceiptProof calldata proof, uint256 targetBlockNumber) external {
         _validateBlockHeader(proof.blockHeader, targetBlockNumber);
 
@@ -122,13 +113,20 @@ contract EscrowERC20 is EscrowBase {
         _tryResetBondData();
 
         uint256 withdrawableAmount = _calculateWithdrawableAmount();
+        uint256 pot = bondPot;
 
         _clearWithdrawState();
+        bondPot = 0;
 
         if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 
         if (!IERC20(tokenContract).transfer(msg.sender, withdrawableAmount)) {
             revert TokenTransferFailed();
+        }
+        // Return the unspent ETH bond pot alongside the token reward.
+        if (pot > 0) {
+            (bool success,) = msg.sender.call{value: pot}("");
+            if (!success) revert BondTransferFailed();
         }
     }
 }
