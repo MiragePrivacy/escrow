@@ -4,12 +4,7 @@ pragma solidity 0.8.30;
 import "./BlockHeaderParser.sol";
 import "./MPTVerifier.sol";
 import "./ReceiptValidator.sol";
-
-interface IBatchERC20 {
-    function send(address to, uint256 amount) external returns (bool);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-}
+import {SafeToken} from "./utils/SafeToken.sol";
 
 /// @title EscrowBatch
 /// @notice Multi-transfer escrow with first-come bid-backed execution. Bidders
@@ -306,7 +301,7 @@ contract EscrowBatch {
             if (msg.value != _bondAmount) revert IncorrectNativeAmount();
         } else {
             if (msg.value != 0) revert IncorrectNativeAmount();
-            if (!IBatchERC20(rewardAsset).transferFrom(msg.sender, address(this), _bondAmount)) {
+            if (!SafeToken.safeTransferFrom(rewardAsset, msg.sender, address(this), _bondAmount)) {
                 revert TokenTransferFailed();
             }
         }
@@ -400,7 +395,7 @@ contract EscrowBatch {
                 rewardAssetFunded = true;
             }
 
-            if (asset != address(0) && !IBatchERC20(asset).transferFrom(msg.sender, address(this), amount)) {
+            if (asset != address(0) && !SafeToken.safeTransferFrom(asset, msg.sender, address(this), amount)) {
                 revert TokenTransferFailed();
             }
 
@@ -410,7 +405,7 @@ contract EscrowBatch {
         }
 
         if (!rewardAssetFunded && rewardAsset != address(0)) {
-            if (!IBatchERC20(rewardAsset).transferFrom(msg.sender, address(this), _currentRewardAmount)) {
+            if (!SafeToken.safeTransferFrom(rewardAsset, msg.sender, address(this), _currentRewardAmount)) {
                 revert TokenTransferFailed();
             }
         }
@@ -792,9 +787,9 @@ contract EscrowBatch {
     function _sendERC20(address asset, address to, uint256 amount) internal {
         bool success;
         if (block.chainid == 11155111) {
-            success = IBatchERC20(asset).send(to, amount);
+            success = SafeToken.safeSend(asset, to, amount);
         } else {
-            success = IBatchERC20(asset).transfer(to, amount);
+            success = SafeToken.safeTransfer(asset, to, amount);
         }
         if (!success) revert TokenTransferFailed();
     }

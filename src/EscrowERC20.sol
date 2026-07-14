@@ -2,13 +2,7 @@
 pragma solidity 0.8.30;
 
 import "./EscrowBase.sol";
-
-interface IERC20 {
-    function send(address to, uint256 amount) external returns (bool);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
-}
+import {SafeToken} from "./utils/SafeToken.sol";
 
 contract EscrowERC20 is EscrowBase {
     // Custom errors
@@ -60,8 +54,9 @@ contract EscrowERC20 is EscrowBase {
         originalRewardAmount = _currentRewardAmount;
         currentPaymentAmount = expectedAmount;
         bondPot = msg.value;
-        if (!IERC20(tokenContract).transferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount))
-        {
+        if (!SafeToken.safeTransferFrom(
+                tokenContract, msg.sender, address(this), originalRewardAmount + currentPaymentAmount
+            )) {
             revert TokenTransferFailed();
         }
         funded = true;
@@ -98,9 +93,9 @@ contract EscrowERC20 is EscrowBase {
         bool success;
         if (block.chainid == 11155111) {
             // Sepolia testnet uses non-standard send
-            success = IERC20(tokenContract).send(executor, payout);
+            success = SafeToken.safeSend(tokenContract, executor, payout);
         } else {
-            success = IERC20(tokenContract).transfer(executor, payout);
+            success = SafeToken.safeTransfer(tokenContract, executor, payout);
         }
         if (!success) revert TokenTransferFailed();
     }
@@ -120,7 +115,7 @@ contract EscrowERC20 is EscrowBase {
 
         if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 
-        if (!IERC20(tokenContract).transfer(msg.sender, withdrawableAmount)) {
+        if (!SafeToken.safeTransfer(tokenContract, msg.sender, withdrawableAmount)) {
             revert TokenTransferFailed();
         }
         // Return the unspent ETH bond pot alongside the token reward.
