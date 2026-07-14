@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity 0.8.30;
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./EscrowBase.sol";
-import {SafeToken} from "./utils/SafeToken.sol";
 
 contract EscrowERC20 is EscrowBase {
+    using SafeERC20 for IERC20;
+
     // Custom errors
     error ZeroAddress();
     error AlreadyFunded();
     error ZeroRewardAmount();
     error ZeroBondAmount();
-    error TokenTransferFailed();
     error InvalidReceiptProof();
     error InvalidTransferEvent();
     error NoWithdrawableFunds();
@@ -54,11 +56,7 @@ contract EscrowERC20 is EscrowBase {
         originalRewardAmount = _currentRewardAmount;
         currentPaymentAmount = expectedAmount;
         bondPot = msg.value;
-        if (!SafeToken.safeTransferFrom(
-                tokenContract, msg.sender, address(this), originalRewardAmount + currentPaymentAmount
-            )) {
-            revert TokenTransferFailed();
-        }
+        IERC20(tokenContract).safeTransferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount);
         funded = true;
     }
 
@@ -90,14 +88,7 @@ contract EscrowERC20 is EscrowBase {
 
         _clearPayoutState();
 
-        bool success;
-        if (block.chainid == 11155111) {
-            // Sepolia testnet uses non-standard send
-            success = SafeToken.safeSend(tokenContract, executor, payout);
-        } else {
-            success = SafeToken.safeTransfer(tokenContract, executor, payout);
-        }
-        if (!success) revert TokenTransferFailed();
+        IERC20(tokenContract).safeTransfer(executor, payout);
     }
 
     /// @notice Cancel and withdraw funds in a single transaction.
@@ -115,9 +106,7 @@ contract EscrowERC20 is EscrowBase {
 
         if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 
-        if (!SafeToken.safeTransfer(tokenContract, msg.sender, withdrawableAmount)) {
-            revert TokenTransferFailed();
-        }
+        IERC20(tokenContract).safeTransfer(msg.sender, withdrawableAmount);
         // Return the unspent ETH bond pot alongside the token reward.
         if (pot > 0) {
             (bool success,) = msg.sender.call{value: pot}("");

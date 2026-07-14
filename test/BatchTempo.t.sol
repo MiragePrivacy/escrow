@@ -7,7 +7,6 @@ import {EscrowBatch} from "../src/EscrowBatch.sol";
 interface IPathUSD {
     function transferFrom(address from, address to, uint256 value) external returns (bool);
     function transfer(address to, uint256 value) external returns (bool);
-    function send(address to, uint256 value) external returns (bool);
 }
 
 /**
@@ -61,7 +60,6 @@ contract BatchTempoTest is Test {
         // Mock token movements — we're testing proof verification, not balance accounting.
         vm.mockCall(TOKEN, abi.encodeWithSelector(IPathUSD.transferFrom.selector), abi.encode(true));
         vm.mockCall(TOKEN, abi.encodeWithSelector(IPathUSD.transfer.selector), abi.encode(true));
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IPathUSD.send.selector), abi.encode(true));
 
         EscrowBatch.BatchTransfer[] memory transfers = new EscrowBatch.BatchTransfer[](3);
         transfers[0] = EscrowBatch.BatchTransfer({asset: TOKEN, recipient: RECIPIENT_A, amount: AMOUNT_A});

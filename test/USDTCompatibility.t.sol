@@ -2,6 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {Test} from "forge-std/Test.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EscrowERC20} from "../src/EscrowERC20.sol";
 import {EscrowBatch} from "../src/EscrowBatch.sol";
 
@@ -29,10 +30,6 @@ contract NoReturnERC20 {
         require(currentAllowance >= amount, "Insufficient allowance");
         allowance[from][msg.sender] = currentAllowance - amount;
         _transfer(from, to, amount);
-    }
-
-    function send(address to, uint256 amount) external {
-        _transfer(msg.sender, to, amount);
     }
 
     function _transfer(address from, address to, uint256 amount) internal {
@@ -103,7 +100,7 @@ contract USDTCompatibilityTest is Test {
         FalseReturnERC20 falseReturnToken = new FalseReturnERC20();
 
         vm.startPrank(deployer);
-        vm.expectRevert(EscrowERC20.TokenTransferFailed.selector);
+        vm.expectRevert(abi.encodeWithSelector(SafeERC20.SafeERC20FailedOperation.selector, address(falseReturnToken)));
         new EscrowERC20{value: BOND_POT}(
             address(falseReturnToken), recipient, PAYMENT_AMOUNT, blindedSigner, REWARD_AMOUNT
         );
@@ -141,26 +138,5 @@ contract USDTCompatibilityTest is Test {
         assertFalse(escrow.funded());
         assertEq(token.balanceOf(address(escrow)), 0);
         assertEq(token.balanceOf(deployer), deployerBalanceBefore + escrowAmount + BOND_AMOUNT);
-    }
-
-    function testSepoliaSendBranchAcceptsNoReturnData() public {
-        EscrowBatch.BatchTransfer[] memory transfers = new EscrowBatch.BatchTransfer[](1);
-        transfers[0] = EscrowBatch.BatchTransfer({asset: address(token), recipient: recipient, amount: PAYMENT_AMOUNT});
-
-        uint256 escrowAmount = PAYMENT_AMOUNT + REWARD_AMOUNT;
-        vm.startPrank(deployer);
-        address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
-        token.approve(futureEscrow, escrowAmount);
-        EscrowBatch escrow = new EscrowBatch(address(token), transfers, REWARD_AMOUNT);
-        vm.stopPrank();
-
-        vm.warp(block.timestamp + escrow.BID_DURATION() + 1);
-        vm.chainId(11155111);
-        vm.prank(deployer);
-        escrow.cancelAndWithdraw();
-
-        assertFalse(escrow.funded());
-        assertEq(token.balanceOf(address(escrow)), 0);
-        assertEq(token.balanceOf(deployer), 1_000e6);
     }
 }
