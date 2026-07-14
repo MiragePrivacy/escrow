@@ -2,8 +2,9 @@
 pragma solidity ^0.8.30;
 
 import {Test, Vm, console} from "forge-std/Test.sol";
-import {EscrowERC20, IERC20} from "../src/EscrowERC20.sol";
+import {EscrowERC20} from "../src/EscrowERC20.sol";
 import {EscrowNative} from "../src/EscrowNative.sol";
+import {IERC20Call, ISendCall} from "../src/utils/SafeToken.sol";
 import {BondAuth} from "./helpers/BondAuth.sol";
 
 contract MockERC20 {
@@ -69,7 +70,7 @@ contract EscrowMPTTest is Test {
         vm.startPrank(deployer);
 
         // Mock the token transfers for constructor funding
-        vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
+        vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20Call.transferFrom.selector), abi.encode(true));
 
         EscrowERC20 proofEscrow = new EscrowERC20{value: BOND_POT}(
             proofTokenAddress, proofRecipient, TRANSFER_AMOUNT, enclave.addr, REWARD_AMOUNT
@@ -80,9 +81,9 @@ contract EscrowMPTTest is Test {
         console.log("Expected amount in proof escrow:", proofEscrow.expectedAmount());
 
         // Mock transfers for bonding and collect payout
-        vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
-        vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
-        vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
+        vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20Call.transferFrom.selector), abi.encode(true));
+        vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20Call.transfer.selector), abi.encode(true));
+        vm.mockCall(proofTokenAddress, abi.encodeWithSelector(ISendCall.send.selector), abi.encode(true));
 
         // Bond as executor, gated by the enclave's BondAuth signature
         vm.prank(proofExecutor);

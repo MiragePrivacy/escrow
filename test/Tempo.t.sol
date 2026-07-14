@@ -3,8 +3,9 @@ pragma solidity ^0.8.30;
 
 import {Test, Vm} from "forge-std/Test.sol";
 import {EscrowBatch} from "../src/EscrowBatch.sol";
-import {EscrowERC20, IERC20} from "../src/EscrowERC20.sol";
+import {EscrowERC20} from "../src/EscrowERC20.sol";
 import {ReceiptValidator} from "../src/ReceiptValidator.sol";
+import {IERC20Call, ISendCall} from "../src/utils/SafeToken.sol";
 import {BondAuth} from "./helpers/BondAuth.sol";
 
 contract ReceiptValidatorWrapper {
@@ -98,9 +99,9 @@ contract TempoTest is Test {
     function testEndToEndProof() public {
         address deployer = makeAddr("deployer");
 
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20Call.transferFrom.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20Call.transfer.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(ISendCall.send.selector), abi.encode(true));
 
         Vm.Wallet memory enclave = vm.createWallet("enclave");
         vm.deal(deployer, 1 ether);
@@ -129,9 +130,9 @@ contract TempoTest is Test {
     function testEndToEndBatchProof() public {
         address deployer = makeAddr("deployer");
 
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20Call.transferFrom.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20Call.transfer.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(ISendCall.send.selector), abi.encode(true));
 
         EscrowBatch.BatchTransfer[] memory transfers = new EscrowBatch.BatchTransfer[](2);
         transfers[0] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
@@ -176,9 +177,9 @@ contract TempoTest is Test {
     function testRejectsDuplicateReceiptLogAcrossBatchProofs() public {
         address deployer = makeAddr("deployer");
 
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20Call.transferFrom.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20Call.transfer.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(ISendCall.send.selector), abi.encode(true));
 
         EscrowBatch.BatchTransfer[] memory transfers = new EscrowBatch.BatchTransfer[](2);
         transfers[0] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
@@ -224,9 +225,9 @@ contract TempoTest is Test {
     function testRejectsProofBeforeBid() public {
         address deployer = makeAddr("deployer");
 
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20Call.transferFrom.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20Call.transfer.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(ISendCall.send.selector), abi.encode(true));
 
         EscrowBatch.BatchTransfer[] memory transfers = new EscrowBatch.BatchTransfer[](1);
         transfers[0] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
