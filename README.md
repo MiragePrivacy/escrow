@@ -1,43 +1,95 @@
-# Mirage Protocol Escrow Contract
+# Mirage Escrow Contracts
 
-This repository contains a Solidity smart contract that provides escrow functionality for the Mirage protocol, enabling secure task execution with bonded guarantees.
+This repository contains the open-source Solidity escrow contracts used by Mirage for proof-based, non-custodial payment settlement.
 
-**Note**: This is a testing implementation with simplified mechanics. The production contract will differ in implementation details while maintaining the core bonding logic.
+For the full protocol model, product flow, Nomad node documentation, and Azoth documentation, see [docs.mirageprivacy.com](https://docs.mirageprivacy.com).
 
-## Escrow Contract
+## High-level model
 
-The escrow contract facilitates trustless task execution between deployers and [Nomads](https://github.com/MiragePrivacy/Nomad) (Mirage protocol nodes). This single-task escrow operates with ERC20 tokens and manages funds, bonds, and payments through a time-based bonding mechanism:
+Mirage separates a private payment into offchain coordination and onchain settlement. A user deploys and funds a temporary escrow for a specific recipient, amount, asset, reward, and execution authorization.
 
-- **Funding**: Deployers fund the contract with reward and payment amounts for task completion
-- **Bonding**: Nomads post bonds (minimum 50% of reward) to secure execution rights within a 5-minute deadline
-- **Collection**: Successful Nomads collect their bond plus rewards and payments, fully draining the contract
-- **Forfeiture**: Failed Nomads forfeit their bonds, which are added to the reward pool for subsequent attempts
-- **Withdrawal**: Deployers can withdraw original funds when no active bonds exist or request cancellation to prevent new bonds
+Execution is coordinated through a reservation-style auction system. Nomad nodes inspect encrypted requests offchain and reserve a request for a short time when they are confident they can fulfill it. During that reservation window, the node sends the requested transfer from its own liquidity, then claims reimbursement by submitting an onchain proof.
 
-The contract ensures security through immutable deployment parameters, time-based execution deadlines, and bond forfeiture mechanisms that incentivize reliable task completion by Nomads.
+The escrow does not trust the node's claim. It verifies recent block data, Merkle-Patricia trie inclusion proofs, transaction receipt contents, and expected transfer details before releasing reimbursement and reward funds.
 
-## Contract Flow
+## Contracts
+
+### `EscrowBase.sol`
+
+Shared base for single-transfer escrows. It handles deployer controls, cancellation, blinded-signer authorization, EIP-712 `BondAuth` validation, short-lived reservation locks, and recent block header checks.
+
+### `EscrowNative.sol`
+
+Single native-ETH transfer escrow. It verifies transaction inclusion, receipt inclusion, successful execution, and the transaction `to` / `value` fields before reimbursing the reserved executor.
+
+### `EscrowERC20.sol`
+
+Single ERC-20 transfer escrow. It verifies receipt inclusion and the expected ERC-20 `Transfer(address,address,uint256)` log before reimbursing the reserved executor in the escrow token.
+
+### `EscrowBatch.sol`
+
+Batch escrow for multiple expected transfers. Bidders reserve one or more transfer rows by posting a bond, prove every committed row, and receive reimbursements plus a pro-rata reward share. Expired reservations are released and forfeited bonds are added to the reward pool.
+
+### Proof libraries
+
+- `BlockHeaderParser.sol` reads block numbers and trie roots from Ethereum and Tempo-wrapped headers.
+- `MPTVerifier.sol` verifies transaction and receipt trie inclusion.
+- `ReceiptValidator.sol` validates receipt status, ERC-20 transfer logs, and native transfer fields.
+- `RLPParser.sol` provides low-level RLP helpers.
+- `utils/ECDSA.sol` recovers `BondAuth` signers.
+
+## Dependency graph
 
 ```mermaid
 graph TD
-    A[Deployer] -->|fund| B[Escrow Contract]
-    B -->|funded = true| C[Ready for Bonds]
-    
-    D[Nomad] -->|bond| C
-    C -->|bondAmount >= reward/2| E[Bonded State]
-    E -->|5 min deadline| F{Task Complete?}
-    
-    F -->|Yes| G[collect]
-    G --> H[Nomad receives bond + reward + payment collateral]
-    
-    F -->|No - deadline passed| I[Bond forfeited]
-    I --> J[Bond added to reward pool]
-    J --> C
-    
-    A -->|requestCancellation| K[Cancellation Requested]
-    K --> L[No new bonds accepted]
-    
-    A -->|withdraw| M{Active bond?}
-    M -->|No| N[Deployer receives original funds]
-    M -->|Yes| O[Wait for bond expiry]
+    EscrowNative --> EscrowBase
+    EscrowERC20 --> EscrowBase
+    EscrowBase --> BlockHeaderParser
+    EscrowBase --> ECDSA
+    EscrowNative --> MPTVerifier
+    EscrowNative --> ReceiptValidator
+    EscrowERC20 --> MPTVerifier
+    EscrowERC20 --> ReceiptValidator
+    EscrowBatch --> BlockHeaderParser
+    EscrowBatch --> MPTVerifier
+    EscrowBatch --> ReceiptValidator
+    BlockHeaderParser --> RLPParser
+    MPTVerifier --> RLPParser
+    ReceiptValidator --> RLPParser
+```
+
+## Azoth pipeline and deterministic variation
+
+This repo is the canonical source for the escrow logic. The normal build pipeline compiles these contracts with Foundry, then `make artifacts` regenerates the pinned bytecode files in `artifacts/` for:
+
+- `EscrowERC20`
+- `EscrowNative`
+- `EscrowBatch`
+
+CI includes a bytecode guard so source changes that affect compiled output must update the pinned artifacts in the same change.
+
+Azoth sits on top of this canonical bytecode. Deployment tooling can take the open-source escrow bytecode, run it through Azoth with deterministic variation parameters, and produce a contract variant that behaves like the original escrow but has a different bytecode-level shape. The point is not to hide unsafe logic; it is to avoid every Mirage escrow sharing one easy-to-fingerprint bytecode signature.
+
+Because Azoth is deterministic, the verification path is reproducible:
+
+1. Start from the open-source escrow source in this repository.
+2. Compile it with the documented build settings.
+3. Regenerate or inspect the canonical bytecode artifact.
+4. Run Azoth with the same deterministic parameters used for the deployed escrow.
+5. Compare the resulting bytecode with the bytecode deployed onchain.
+
+If the bytecode matches, a user, Nomad executor, auditor, or third party can verify that the deployed contract is a valid Mirage escrow variant. This makes verification trustless: both the escrow contracts and Azoth are open source, and neither side needs to rely on a private registry or opaque build service to know what code they are interacting with.
+
+## Development
+
+Run tests:
+
+```sh
+forge test
+```
+
+Regenerate bytecode artifacts after any contract change that affects compiled output:
+
+```sh
+make artifacts
 ```
