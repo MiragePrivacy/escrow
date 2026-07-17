@@ -151,6 +151,7 @@ contract EscrowNativeTest is Test {
 
         assertEq(escrow.bondedExecutor(), executor);
         assertEq(escrow.executionDeadline(), block.timestamp + 5 minutes);
+        assertEq(escrow.bondStartBlock(), block.number);
         assertTrue(escrow.is_bonded());
         assertEq(escrow.bondPot(), 0);
         assertEq(address(escrow).balance, REWARD_AMOUNT + PAYMENT_AMOUNT);
@@ -220,8 +221,22 @@ contract EscrowNativeTest is Test {
 
     function testCollectNativeRequiresProof() public {
         _bondExecutor();
+
+        uint256 proofBlock = block.number + 1;
+        vm.roll(proofBlock + 1);
+        vm.setBlockhash(proofBlock, bytes32(uint256(1)));
+
         vm.prank(executor);
         vm.expectRevert();
+        escrow.collect(_dummyProof(), proofBlock);
+    }
+
+    function testCollectNativeRejectsProofBeforeBond() public {
+        vm.roll(100);
+        _bondExecutor();
+
+        vm.prank(executor);
+        vm.expectRevert(EscrowBase.ProofBeforeBond.selector);
         escrow.collect(_dummyProof(), block.number - 1);
     }
 
