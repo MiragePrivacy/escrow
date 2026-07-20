@@ -2,7 +2,8 @@
 pragma solidity ^0.8.30;
 
 import {Test, Vm, console} from "forge-std/Test.sol";
-import {EscrowERC20, IERC20} from "../src/EscrowERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {EscrowERC20} from "../src/EscrowERC20.sol";
 import {EscrowNative} from "../src/EscrowNative.sol";
 import {BondAuth} from "./helpers/BondAuth.sol";
 
@@ -82,7 +83,6 @@ contract EscrowMPTTest is Test {
         // Mock transfers for bonding and collect payout
         vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
         vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
-        vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.send.selector), abi.encode(true));
 
         // Bond as executor, gated by the enclave's BondAuth signature
         vm.prank(proofExecutor);

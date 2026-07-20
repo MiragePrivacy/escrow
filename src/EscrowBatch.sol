@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity 0.8.30;
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./BlockHeaderParser.sol";
 import "./MPTVerifier.sol";
 import "./ReceiptValidator.sol";
-
-interface IBatchERC20 {
-    function send(address to, uint256 amount) external returns (bool);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-}
 
 /// @title EscrowBatch
 /// @notice Multi-transfer escrow with first-come bid-backed execution. Bidders
@@ -18,6 +14,8 @@ interface IBatchERC20 {
 /// their bond plus a pro-rata reward share. Expired bids forfeit their bond
 /// into the reward pool.
 contract EscrowBatch {
+    using SafeERC20 for IERC20;
+
     // ============ Types ============
 
     /// TODO: reward calculation across mixed assets is not fully solved yet.
@@ -78,7 +76,6 @@ contract EscrowBatch {
     error ZeroRewardAmount();
     error ZeroPaymentAmount();
     error AlreadyFunded();
-    error TokenTransferFailed();
     error ETHTransferFailed();
     error IncorrectNativeAmount();
     error MalformedProof();
@@ -306,9 +303,7 @@ contract EscrowBatch {
             if (msg.value != _bondAmount) revert IncorrectNativeAmount();
         } else {
             if (msg.value != 0) revert IncorrectNativeAmount();
-            if (!IBatchERC20(rewardAsset).transferFrom(msg.sender, address(this), _bondAmount)) {
-                revert TokenTransferFailed();
-            }
+            IERC20(rewardAsset).safeTransferFrom(msg.sender, address(this), _bondAmount);
         }
     }
 
@@ -400,9 +395,7 @@ contract EscrowBatch {
                 rewardAssetFunded = true;
             }
 
-            if (asset != address(0) && !IBatchERC20(asset).transferFrom(msg.sender, address(this), amount)) {
-                revert TokenTransferFailed();
-            }
+            if (asset != address(0)) IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
 
             unchecked {
                 ++i;
@@ -410,9 +403,7 @@ contract EscrowBatch {
         }
 
         if (!rewardAssetFunded && rewardAsset != address(0)) {
-            if (!IBatchERC20(rewardAsset).transferFrom(msg.sender, address(this), _currentRewardAmount)) {
-                revert TokenTransferFailed();
-            }
+            IERC20(rewardAsset).safeTransferFrom(msg.sender, address(this), _currentRewardAmount);
         }
     }
 
@@ -790,12 +781,6 @@ contract EscrowBatch {
     }
 
     function _sendERC20(address asset, address to, uint256 amount) internal {
-        bool success;
-        if (block.chainid == 11155111) {
-            success = IBatchERC20(asset).send(to, amount);
-        } else {
-            success = IBatchERC20(asset).transfer(to, amount);
-        }
-        if (!success) revert TokenTransferFailed();
+        IERC20(asset).safeTransfer(to, amount);
     }
 }

@@ -14,7 +14,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-forge build --silent
+# Always recompile so artifact generation cannot reuse stale incremental output.
+forge build --silent --force
 
 extract() {
   local contract="$1"
