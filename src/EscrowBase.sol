@@ -22,6 +22,7 @@ abstract contract EscrowBase {
     error InvalidBondSignature();
     error BondTransferFailed();
     error ZeroBlindedSigner();
+    error ProofBeforeBond();
 
     // EIP-712 typed-data constants. The domain MUST match the off-chain signer
     // (nomad `crates/types/src/contracts.rs`) byte-for-byte, otherwise the recovered
@@ -57,6 +58,7 @@ abstract contract EscrowBase {
     // The following variables are dynamically adjusted when a bond or cancellation request is submitted.
     address public bondedExecutor;
     uint256 public executionDeadline;
+    uint256 public bondStartBlock;
     // ETH bond pot. Sourced at fund time; paid out to the fresh EOA at bond() to bootstrap
     // its gas. A one-shot faucet: once spent it does not refill, so a retry after a failed
     // serve must use an already-funded EOA.
@@ -117,6 +119,7 @@ abstract contract EscrowBase {
         if (msg.sender != bondedExecutor || !is_bonded()) revert OnlyBondedExecutor();
         if (targetBlockNumber > block.number) revert TargetBlockInFuture();
         if (block.number - targetBlockNumber > MAX_BLOCK_LOOKBACK) revert TargetBlockTooOld();
+        if (targetBlockNumber <= bondStartBlock) revert ProofBeforeBond();
 
         bytes32 targetBlockHash = blockhash(targetBlockNumber);
         if (targetBlockHash == bytes32(0)) revert BlockHashUnavailable();
@@ -131,6 +134,7 @@ abstract contract EscrowBase {
 
         bondedExecutor = address(0);
         executionDeadline = 0;
+        bondStartBlock = 0;
     }
 
     // Internal helper to clear an expired bond so a fresh enclave can bond.
@@ -155,6 +159,7 @@ abstract contract EscrowBase {
     function _setBondData() internal {
         bondedExecutor = msg.sender;
         executionDeadline = block.timestamp + 5 minutes;
+        bondStartBlock = block.number;
     }
 
     // Locks the escrow to the calling fresh EOA and pays it the ETH bond pot to bootstrap
@@ -179,6 +184,7 @@ abstract contract EscrowBase {
     function _clearPayoutState() internal {
         bondedExecutor = address(0);
         executionDeadline = 0;
+        bondStartBlock = 0;
         funded = false;
         currentPaymentAmount = 0;
         currentRewardAmount = 0;
@@ -206,5 +212,6 @@ abstract contract EscrowBase {
         funded = false;
         currentPaymentAmount = 0;
         currentRewardAmount = 0;
+        bondStartBlock = 0;
     }
 }
