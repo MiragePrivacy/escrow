@@ -7,6 +7,7 @@ import {EscrowBatch} from "../src/EscrowBatch.sol";
 import {EscrowERC20} from "../src/EscrowERC20.sol";
 import {ReceiptValidator} from "../src/ReceiptValidator.sol";
 import {BondAuth} from "./helpers/BondAuth.sol";
+import {BatchBondAuth} from "./helpers/BatchBondAuth.sol";
 
 contract ReceiptValidatorWrapper {
     function validateTransferInReceipt(
@@ -136,15 +137,19 @@ contract TempoTest is Test {
         transfers[0] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
         transfers[1] = _erc20BatchTransfer(FEE_RECIPIENT, FEE_AMOUNT);
 
+        Vm.Wallet memory enclave = vm.createWallet("enclave");
+
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18);
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, enclave.addr);
 
         uint256[] memory transferIndexes = new uint256[](2);
         transferIndexes[0] = 0;
         transferIndexes[1] = 1;
 
         vm.prank(FROM_ADDRESS);
-        escrow.bid(transferIndexes, 250e18);
+        escrow.bid(
+            transferIndexes, BatchBondAuth.sign(vm, enclave.privateKey, address(escrow), FROM_ADDRESS, transferIndexes)
+        );
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
@@ -182,15 +187,19 @@ contract TempoTest is Test {
         transfers[0] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
         transfers[1] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
 
+        Vm.Wallet memory enclave = vm.createWallet("enclave");
+
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18);
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, enclave.addr);
 
         uint256[] memory transferIndexes = new uint256[](2);
         transferIndexes[0] = 0;
         transferIndexes[1] = 1;
 
         vm.prank(FROM_ADDRESS);
-        escrow.bid(transferIndexes, 250e18);
+        escrow.bid(
+            transferIndexes, BatchBondAuth.sign(vm, enclave.privateKey, address(escrow), FROM_ADDRESS, transferIndexes)
+        );
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
@@ -228,8 +237,10 @@ contract TempoTest is Test {
         EscrowBatch.BatchTransfer[] memory transfers = new EscrowBatch.BatchTransfer[](1);
         transfers[0] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
 
+        Vm.Wallet memory enclave = vm.createWallet("enclave");
+
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18);
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, enclave.addr);
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
@@ -238,7 +249,9 @@ contract TempoTest is Test {
         transferIndexes[0] = 0;
 
         vm.prank(FROM_ADDRESS);
-        escrow.bid(transferIndexes, 250e18);
+        escrow.bid(
+            transferIndexes, BatchBondAuth.sign(vm, enclave.privateKey, address(escrow), FROM_ADDRESS, transferIndexes)
+        );
 
         EscrowBatch.BatchReceiptProof memory proof = EscrowBatch.BatchReceiptProof({
             blockHeader: BLOCK_HEADER,

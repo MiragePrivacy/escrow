@@ -28,7 +28,7 @@ Single ERC-20 transfer escrow. It verifies receipt inclusion and the expected ER
 
 ### `EscrowBatch.sol`
 
-Batch escrow for multiple expected transfers. Bidders reserve one or more transfer rows by posting a bond, prove every committed row, and receive reimbursements plus a pro-rata reward share. Expired reservations are released and forfeited bonds are added to the reward pool.
+Batch escrow for multiple expected transfers. Bidding is free and gated by the enclave's blinded signer: a `BatchBondAuth` EIP-712 signature over the bidding EOA and the claimed rows must recover to the escrow's `blindedSigner`. Bidders reserve one or more transfer rows, prove every committed row, and receive reimbursements plus a pro-rata reward share. Expired reservations simply release their rows for the next bidder.
 
 ### Proof libraries
 
@@ -36,7 +36,7 @@ Batch escrow for multiple expected transfers. Bidders reserve one or more transf
 - `MPTVerifier.sol` verifies transaction and receipt trie inclusion.
 - `ReceiptValidator.sol` validates receipt status, ERC-20 transfer logs, and native transfer fields.
 - `RLPParser.sol` provides low-level RLP helpers.
-- `utils/ECDSA.sol` recovers `BondAuth` signers.
+- `utils/ECDSA.sol` recovers `BondAuth` / `BatchBondAuth` signers.
 
 ## Dependency graph
 
