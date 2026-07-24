@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.30;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EscrowERC20} from "../src/EscrowERC20.sol";
 import {EscrowBatch} from "../src/EscrowBatch.sol";
+import {BatchBondAuth} from "./helpers/BatchBondAuth.sol";
 
 /// @dev Models mainnet USDT's transfer API: successful calls return no data.
 contract NoReturnERC20 {
@@ -57,9 +58,11 @@ contract USDTCompatibilityTest is Test {
     address private recipient;
     address private blindedSigner;
 
+    // The "enclave" whose blinded key gates batch bidding. blindedSigner = enclave.addr.
+    Vm.Wallet private enclave;
+
     uint256 private constant PAYMENT_AMOUNT = 100e6;
     uint256 private constant REWARD_AMOUNT = 10e6;
-    uint256 private constant BOND_AMOUNT = REWARD_AMOUNT / 2;
     uint256 private constant BOND_POT = 0.01 ether;
 
     function setUp() public {
@@ -68,9 +71,9 @@ contract USDTCompatibilityTest is Test {
         bidder = makeAddr("bidder");
         recipient = makeAddr("recipient");
         blindedSigner = makeAddr("blindedSigner");
+        enclave = vm.createWallet("enclave");
 
         token.mint(deployer, 1_000e6);
-        token.mint(bidder, BOND_AMOUNT);
         vm.deal(deployer, BOND_POT);
     }
 
@@ -115,20 +118,19 @@ contract USDTCompatibilityTest is Test {
         vm.startPrank(deployer);
         address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow, escrowAmount);
-        EscrowBatch escrow = new EscrowBatch(address(token), transfers, REWARD_AMOUNT);
+        EscrowBatch escrow = new EscrowBatch(address(token), transfers, REWARD_AMOUNT, enclave.addr);
         vm.stopPrank();
 
         assertTrue(escrow.funded());
         assertEq(token.balanceOf(address(escrow)), escrowAmount);
 
+        // Bidding is free: it moves no tokens, so the escrow balance is unchanged.
         uint256[] memory indexes = new uint256[](1);
         indexes[0] = 0;
-        vm.startPrank(bidder);
-        token.approve(address(escrow), BOND_AMOUNT);
-        escrow.bid(indexes, BOND_AMOUNT);
-        vm.stopPrank();
+        vm.prank(bidder);
+        escrow.bid(indexes, BatchBondAuth.sign(vm, enclave.privateKey, address(escrow), bidder, indexes));
 
-        assertEq(token.balanceOf(address(escrow)), escrowAmount + BOND_AMOUNT);
+        assertEq(token.balanceOf(address(escrow)), escrowAmount);
 
         vm.warp(block.timestamp + escrow.BID_DURATION() + 1);
         uint256 deployerBalanceBefore = token.balanceOf(deployer);
@@ -137,6 +139,6 @@ contract USDTCompatibilityTest is Test {
 
         assertFalse(escrow.funded());
         assertEq(token.balanceOf(address(escrow)), 0);
-        assertEq(token.balanceOf(deployer), deployerBalanceBefore + escrowAmount + BOND_AMOUNT);
+        assertEq(token.balanceOf(deployer), deployerBalanceBefore + escrowAmount);
     }
 }

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.30;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {EscrowBatch} from "../src/EscrowBatch.sol";
+import {BatchBondAuth} from "./helpers/BatchBondAuth.sol";
 
 contract BatchMockERC20 {
     mapping(address => uint256) public balanceOf;
@@ -64,11 +65,13 @@ contract EscrowBatchTest is Test {
     address public recipientB;
     address public other;
 
+    // The "enclave" whose blinded key gates bidding. blindedSigner = enclave.addr.
+    Vm.Wallet enclave;
+
     uint256 constant AMOUNT_A = 100e18;
     uint256 constant AMOUNT_B = 250e18;
     uint256 constant PAYMENT_AMOUNT = AMOUNT_A + AMOUNT_B;
     uint256 constant REWARD_AMOUNT = 50e18;
-    uint256 constant BOND_AMOUNT = 25e18;
 
     function setUp() public {
         deployer = makeAddr("deployer");
@@ -76,6 +79,7 @@ contract EscrowBatchTest is Test {
         recipientA = makeAddr("recipientA");
         recipientB = makeAddr("recipientB");
         other = makeAddr("other");
+        enclave = vm.createWallet("enclave");
 
         vm.startPrank(deployer);
         token = new BatchMockERC20();
@@ -84,11 +88,20 @@ contract EscrowBatchTest is Test {
         address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow, PAYMENT_AMOUNT + REWARD_AMOUNT);
 
-        escrow = new EscrowBatch(address(token), _batch(), REWARD_AMOUNT);
+        escrow = new EscrowBatch(address(token), _batch(), REWARD_AMOUNT, enclave.addr);
         vm.stopPrank();
 
         token.mint(bidder, 10_000e18);
         token.mint(other, 10_000e18);
+    }
+
+    // Enclave signature authorizing `bondingExecutor` to bid `transferIndexes` on `escrowAddr`.
+    function _sig(address escrowAddr, address bondingExecutor, uint256[] memory transferIndexes)
+        internal
+        view
+        returns (bytes memory)
+    {
+        return BatchBondAuth.sign(vm, enclave.privateKey, escrowAddr, bondingExecutor, transferIndexes);
     }
 
     function testConstructorStoresBatch() public view {
@@ -120,7 +133,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBatch.EmptyBatch.selector);
-        new EscrowBatch(address(token), transfers, REWARD_AMOUNT);
+        new EscrowBatch(address(token), transfers, REWARD_AMOUNT, enclave.addr);
     }
 
     function testConstructorRejectsZeroAmount() public {
@@ -129,12 +142,12 @@ contract EscrowBatchTest is Test {
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBatch.ZeroPaymentAmount.selector);
-        new EscrowBatch(address(token), transfers, REWARD_AMOUNT);
+        new EscrowBatch(address(token), transfers, REWARD_AMOUNT, enclave.addr);
     }
 
     function testFundUnfundedBatch() public {
         vm.startPrank(deployer);
-        EscrowBatch unfunded = new EscrowBatch(address(token), _batch(), 0);
+        EscrowBatch unfunded = new EscrowBatch(address(token), _batch(), 0, enclave.addr);
 
         token.approve(address(unfunded), PAYMENT_AMOUNT + REWARD_AMOUNT);
         token.resetCallStats();
@@ -151,7 +164,7 @@ contract EscrowBatchTest is Test {
 
     function testFundOnlyDeployer() public {
         vm.prank(deployer);
-        EscrowBatch unfunded = new EscrowBatch(address(token), _batch(), 0);
+        EscrowBatch unfunded = new EscrowBatch(address(token), _batch(), 0, enclave.addr);
 
         vm.startPrank(bidder);
         token.approve(address(unfunded), PAYMENT_AMOUNT + REWARD_AMOUNT);
@@ -167,7 +180,8 @@ contract EscrowBatchTest is Test {
         vm.startPrank(deployer);
         vm.deal(deployer, 1 ether);
         token.approve(vm.computeCreateAddress(deployer, vm.getNonce(deployer)), REWARD_AMOUNT);
-        EscrowBatch nativeEscrow = new EscrowBatch{value: 1 ether}(address(token), transfers, REWARD_AMOUNT);
+        EscrowBatch nativeEscrow =
+            new EscrowBatch{value: 1 ether}(address(token), transfers, REWARD_AMOUNT, enclave.addr);
         vm.stopPrank();
 
         assertTrue(nativeEscrow.funded());
@@ -177,11 +191,10 @@ contract EscrowBatchTest is Test {
     }
 
     function testBid() public {
-        _placeBid(_fullIndexes(), BOND_AMOUNT);
+        _placeBid(_fullIndexes());
 
-        (uint256 bondAmount, uint256 expiresAt, uint256 startBlock) = escrow.bids(bidder);
+        (uint256 expiresAt, uint256 startBlock) = escrow.bids(bidder);
 
-        assertEq(bondAmount, BOND_AMOUNT);
         assertEq(expiresAt, block.timestamp + escrow.BID_DURATION());
         assertEq(startBlock, block.number);
         assertEq(escrow.activeBidCount(), 1);
@@ -193,13 +206,45 @@ contract EscrowBatchTest is Test {
         assertTrue(escrow.is_bonded());
     }
 
-    function testMultipleBiddersCanCoverDisjointTransfers() public {
-        _placeBid(_singleIndex(0), BOND_AMOUNT);
+    function testBidRejectsInvalidSignature() public {
+        // A signature from a wallet other than the enclave does not recover to blindedSigner.
+        Vm.Wallet memory attacker = vm.createWallet("attacker");
+        bytes memory badSig = BatchBondAuth.sign(vm, attacker.privateKey, address(escrow), bidder, _fullIndexes());
 
-        vm.startPrank(other);
-        token.approve(address(escrow), BOND_AMOUNT);
-        escrow.bid(_singleIndex(1), BOND_AMOUNT);
-        vm.stopPrank();
+        vm.prank(bidder);
+        vm.expectRevert(EscrowBatch.InvalidBondSignature.selector);
+        escrow.bid(_fullIndexes(), badSig);
+    }
+
+    function testBidRejectsSignatureForDifferentExecutor() public {
+        // Enclave authorized `other`, not `bidder`; the executor binding stops the replay.
+        bytes memory sigForOther = _sig(address(escrow), other, _fullIndexes());
+
+        vm.prank(bidder);
+        vm.expectRevert(EscrowBatch.InvalidBondSignature.selector);
+        escrow.bid(_fullIndexes(), sigForOther);
+    }
+
+    function testBidRejectsSignatureForDifferentRows() public {
+        // Enclave authorized rows {0}; the row binding stops reuse for a different subset.
+        bytes memory sigForRowZero = _sig(address(escrow), bidder, _singleIndex(0));
+
+        vm.prank(bidder);
+        vm.expectRevert(EscrowBatch.InvalidBondSignature.selector);
+        escrow.bid(_singleIndex(1), sigForRowZero);
+    }
+
+    function testConstructorRejectsZeroBlindedSigner() public {
+        vm.prank(deployer);
+        vm.expectRevert(EscrowBatch.ZeroBlindedSigner.selector);
+        new EscrowBatch(address(token), _batch(), REWARD_AMOUNT, address(0));
+    }
+
+    function testMultipleBiddersCanCoverDisjointTransfers() public {
+        _placeBid(_singleIndex(0));
+
+        vm.prank(other);
+        escrow.bid(_singleIndex(1), _sig(address(escrow), other, _singleIndex(1)));
 
         assertEq(escrow.activeBidCount(), 2);
         assertEq(escrow.transferBidder(0), bidder);
@@ -207,13 +252,11 @@ contract EscrowBatchTest is Test {
     }
 
     function testBidRejectsOverlap() public {
-        _placeBid(_singleIndex(0), BOND_AMOUNT);
+        _placeBid(_singleIndex(0));
 
-        vm.startPrank(other);
-        token.approve(address(escrow), BOND_AMOUNT);
+        vm.prank(other);
         vm.expectRevert(EscrowBatch.TransferStateConflict.selector);
-        escrow.bid(_singleIndex(0), BOND_AMOUNT);
-        vm.stopPrank();
+        escrow.bid(_singleIndex(0), _sig(address(escrow), other, _singleIndex(0)));
     }
 
     function testBidRejectsDuplicateTransferIndex() public {
@@ -221,47 +264,32 @@ contract EscrowBatchTest is Test {
         duplicateIndexes[0] = 0;
         duplicateIndexes[1] = 0;
 
-        vm.startPrank(bidder);
-        token.approve(address(escrow), BOND_AMOUNT);
+        vm.prank(bidder);
         vm.expectRevert(EscrowBatch.DuplicateProofItem.selector);
-        escrow.bid(duplicateIndexes, BOND_AMOUNT);
-        vm.stopPrank();
-    }
-
-    function testBidRejectsInsufficientBondForSubset() public {
-        vm.startPrank(bidder);
-        token.approve(address(escrow), 1);
-        vm.expectRevert(EscrowBatch.InsufficientBond.selector);
-        escrow.bid(_singleIndex(1), 1);
-        vm.stopPrank();
+        escrow.bid(duplicateIndexes, _sig(address(escrow), bidder, duplicateIndexes));
     }
 
     function testBidAfterDeadlinePassed() public {
-        _placeBid(_fullIndexes(), BOND_AMOUNT);
+        _placeBid(_fullIndexes());
 
         vm.warp(block.timestamp + 6 minutes);
 
-        uint256 updatedReward = REWARD_AMOUNT + BOND_AMOUNT;
-        uint256 newBondAmount = updatedReward / 2;
+        // No forfeited deposit rolls into the reward: an expired bid just frees its rows.
+        vm.prank(other);
+        escrow.bid(_fullIndexes(), _sig(address(escrow), other, _fullIndexes()));
 
-        vm.startPrank(other);
-        token.approve(address(escrow), newBondAmount);
-        escrow.bid(_fullIndexes(), newBondAmount);
-        vm.stopPrank();
+        (uint256 expiresAt, uint256 startBlock) = escrow.bids(other);
 
-        (uint256 otherBondAmount, uint256 expiresAt, uint256 startBlock) = escrow.bids(other);
-
-        assertEq(otherBondAmount, newBondAmount);
         assertEq(expiresAt, block.timestamp + escrow.BID_DURATION());
         assertEq(startBlock, block.number);
-        assertEq(escrow.currentRewardAmount(), updatedReward);
+        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT);
         assertEq(escrow.activeBidCount(), 1);
         assertEq(escrow.transferBidder(0), other);
         assertEq(escrow.transferBidder(1), other);
     }
 
     function testCollectRejectsInvalidBatchProofLength() public {
-        _placeBid(_fullIndexes(), BOND_AMOUNT);
+        _placeBid(_fullIndexes());
 
         uint256[] memory transferIndexes = _singleIndex(0);
         uint256[] memory logIndexes = new uint256[](2);
@@ -272,7 +300,7 @@ contract EscrowBatchTest is Test {
     }
 
     function testCollectRejectsDuplicateLogIndex() public {
-        _placeBid(_fullIndexes(), BOND_AMOUNT);
+        _placeBid(_fullIndexes());
 
         uint256[] memory logIndexes = new uint256[](2);
         logIndexes[0] = 3;
@@ -284,7 +312,7 @@ contract EscrowBatchTest is Test {
     }
 
     function testCollectRejectsDuplicateTransferIndex() public {
-        _placeBid(_fullIndexes(), BOND_AMOUNT);
+        _placeBid(_fullIndexes());
 
         uint256[] memory duplicateIndexes = new uint256[](2);
         duplicateIndexes[0] = 0;
@@ -299,7 +327,7 @@ contract EscrowBatchTest is Test {
     }
 
     function testCollectRejectsUncoveredTransfer() public {
-        _placeBid(_singleIndex(0), BOND_AMOUNT);
+        _placeBid(_singleIndex(0));
 
         vm.prank(bidder);
         vm.expectRevert(EscrowBatch.TransferStateConflict.selector);
@@ -329,7 +357,7 @@ contract EscrowBatchTest is Test {
     }
 
     function testCancelAndWithdrawRejectsActiveBid() public {
-        _placeBid(_singleIndex(0), BOND_AMOUNT);
+        _placeBid(_singleIndex(0));
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBatch.BidActive.selector);
@@ -337,7 +365,7 @@ contract EscrowBatchTest is Test {
     }
 
     function testCancelAndWithdrawAfterExpiredBid() public {
-        _placeBid(_singleIndex(0), BOND_AMOUNT);
+        _placeBid(_singleIndex(0));
         vm.warp(block.timestamp + 6 minutes);
 
         uint256 initialBalance = token.balanceOf(deployer);
@@ -347,10 +375,13 @@ contract EscrowBatchTest is Test {
 
         assertFalse(escrow.funded());
         assertEq(escrow.activeBidCount(), 0);
-        assertEq(token.balanceOf(deployer), initialBalance + PAYMENT_AMOUNT + REWARD_AMOUNT + BOND_AMOUNT);
+        // No deposit is held, so an expired bid leaves nothing extra to refund.
+        assertEq(token.balanceOf(deployer), initialBalance + PAYMENT_AMOUNT + REWARD_AMOUNT);
     }
 
-    function testEthBondEscrowAcceptsEthBid() public {
+    // Bidding is free: an ETH-reward escrow accepts a bid carrying no value, and the
+    // escrow balance is unchanged by the commitment.
+    function testEthRewardEscrowAcceptsFreeBid() public {
         EscrowBatch.BatchTransfer[] memory transfers = new EscrowBatch.BatchTransfer[](2);
         transfers[0] = EscrowBatch.BatchTransfer({asset: address(token), recipient: recipientA, amount: AMOUNT_A});
         transfers[1] = EscrowBatch.BatchTransfer({asset: address(token), recipient: recipientB, amount: AMOUNT_B});
@@ -358,44 +389,31 @@ contract EscrowBatchTest is Test {
         vm.deal(deployer, REWARD_AMOUNT);
         vm.startPrank(deployer);
         token.approve(vm.computeCreateAddress(deployer, vm.getNonce(deployer)), PAYMENT_AMOUNT);
-        EscrowBatch ethEscrow = new EscrowBatch{value: REWARD_AMOUNT}(address(0), transfers, REWARD_AMOUNT);
+        EscrowBatch ethEscrow =
+            new EscrowBatch{value: REWARD_AMOUNT}(address(0), transfers, REWARD_AMOUNT, enclave.addr);
         vm.stopPrank();
 
         assertEq(ethEscrow.rewardAsset(), address(0));
-        assertEq(ethEscrow.currentRewardAmount(), REWARD_AMOUNT);
         assertEq(address(ethEscrow).balance, REWARD_AMOUNT);
 
-        vm.deal(bidder, BOND_AMOUNT);
         vm.prank(bidder);
-        ethEscrow.bid{value: BOND_AMOUNT}(_fullIndexes(), BOND_AMOUNT);
+        ethEscrow.bid(
+            _fullIndexes(), BatchBondAuth.sign(vm, enclave.privateKey, address(ethEscrow), bidder, _fullIndexes())
+        );
 
-        (uint256 bondAmount,,) = ethEscrow.bids(bidder);
-        assertEq(bondAmount, BOND_AMOUNT);
-        assertEq(address(ethEscrow).balance, REWARD_AMOUNT + BOND_AMOUNT);
+        (uint256 expiresAt,) = ethEscrow.bids(bidder);
+        assertEq(expiresAt, block.timestamp + ethEscrow.BID_DURATION());
+        assertEq(address(ethEscrow).balance, REWARD_AMOUNT);
     }
 
-    function testEthBondEscrowRejectsZeroValueBid() public {
-        EscrowBatch.BatchTransfer[] memory transfers = _batch();
-        vm.deal(deployer, REWARD_AMOUNT);
-        vm.startPrank(deployer);
-        token.approve(vm.computeCreateAddress(deployer, vm.getNonce(deployer)), PAYMENT_AMOUNT);
-        EscrowBatch ethEscrow = new EscrowBatch{value: REWARD_AMOUNT}(address(0), transfers, REWARD_AMOUNT);
-        vm.stopPrank();
-
-        vm.deal(bidder, BOND_AMOUNT);
-        vm.startPrank(bidder);
-        vm.expectRevert(EscrowBatch.IncorrectNativeAmount.selector);
-        ethEscrow.bid(_fullIndexes(), BOND_AMOUNT); // msg.value omitted → 0 ≠ BOND_AMOUNT
-        vm.stopPrank();
-    }
-
-    function testErc20BondEscrowRejectsExtraValueOnBid() public {
+    // bid() is non-payable, so any attached value reverts before the signature is checked.
+    function testBidRejectsAttachedValue() public {
         vm.deal(bidder, 1 ether);
-        vm.startPrank(bidder);
-        token.approve(address(escrow), BOND_AMOUNT);
-        vm.expectRevert(EscrowBatch.IncorrectNativeAmount.selector);
-        escrow.bid{value: 1}(_fullIndexes(), BOND_AMOUNT);
-        vm.stopPrank();
+        vm.prank(bidder);
+        (bool ok,) = address(escrow).call{value: 1}(
+            abi.encodeWithSelector(escrow.bid.selector, _fullIndexes(), _sig(address(escrow), bidder, _fullIndexes()))
+        );
+        assertFalse(ok);
     }
 
     function testEthBondCancelAndWithdrawRefundsEth() public {
@@ -403,7 +421,8 @@ contract EscrowBatchTest is Test {
         vm.deal(deployer, REWARD_AMOUNT);
         vm.startPrank(deployer);
         token.approve(vm.computeCreateAddress(deployer, vm.getNonce(deployer)), PAYMENT_AMOUNT);
-        EscrowBatch ethEscrow = new EscrowBatch{value: REWARD_AMOUNT}(address(0), transfers, REWARD_AMOUNT);
+        EscrowBatch ethEscrow =
+            new EscrowBatch{value: REWARD_AMOUNT}(address(0), transfers, REWARD_AMOUNT, enclave.addr);
         vm.stopPrank();
 
         uint256 tokenBalanceBefore = token.balanceOf(deployer);
@@ -428,11 +447,9 @@ contract EscrowBatchTest is Test {
         vm.stopPrank();
     }
 
-    function _placeBid(uint256[] memory transferIndexes, uint256 bondAmount) internal {
-        vm.startPrank(bidder);
-        token.approve(address(escrow), bondAmount);
-        escrow.bid(transferIndexes, bondAmount);
-        vm.stopPrank();
+    function _placeBid(uint256[] memory transferIndexes) internal {
+        vm.prank(bidder);
+        escrow.bid(transferIndexes, _sig(address(escrow), bidder, transferIndexes));
     }
 
     function _batch() internal view returns (EscrowBatch.BatchTransfer[] memory transfers) {

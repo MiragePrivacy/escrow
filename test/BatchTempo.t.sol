@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.30;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {EscrowBatch} from "../src/EscrowBatch.sol";
+import {BatchBondAuth} from "./helpers/BatchBondAuth.sol";
 
 interface IPathUSD {
     function transferFrom(address from, address to, uint256 value) external returns (bool);
@@ -48,10 +49,13 @@ contract BatchTempoTest is Test {
     bytes constant RECEIPT_PATH = hex"11";
 
     uint256 constant REWARD_AMOUNT = 1_000_000; // 1 PathUSD (6 decimals)
-    uint256 constant BOND_AMOUNT = 500_000; // 50% of reward; meets minimum
+
+    // The "enclave" whose blinded key gates bidding. blindedSigner = enclave.addr.
+    Vm.Wallet enclave;
 
     function setUp() public {
         vm.chainId(42429);
+        enclave = vm.createWallet("enclave");
     }
 
     function testEndToEndBatchProof() public {
@@ -67,7 +71,7 @@ contract BatchTempoTest is Test {
         transfers[2] = EscrowBatch.BatchTransfer({asset: TOKEN, recipient: RECIPIENT_C, amount: AMOUNT_C});
 
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, REWARD_AMOUNT);
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, REWARD_AMOUNT, enclave.addr);
 
         uint256[] memory bidIndexes = new uint256[](3);
         bidIndexes[0] = 0;
@@ -75,7 +79,7 @@ contract BatchTempoTest is Test {
         bidIndexes[2] = 2;
 
         vm.prank(BIDDER);
-        escrow.bid(bidIndexes, BOND_AMOUNT);
+        escrow.bid(bidIndexes, BatchBondAuth.sign(vm, enclave.privateKey, address(escrow), BIDDER, bidIndexes));
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, keccak256(BLOCK_HEADER));
@@ -108,9 +112,7 @@ contract BatchTempoTest is Test {
 
         vm.expectCall(
             TOKEN,
-            abi.encodeWithSelector(
-                IPathUSD.transfer.selector, BIDDER, AMOUNT_A + AMOUNT_B + AMOUNT_C + REWARD_AMOUNT + BOND_AMOUNT
-            ),
+            abi.encodeWithSelector(IPathUSD.transfer.selector, BIDDER, AMOUNT_A + AMOUNT_B + AMOUNT_C + REWARD_AMOUNT),
             1
         );
         vm.prank(BIDDER);

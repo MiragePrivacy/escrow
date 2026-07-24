@@ -6,13 +6,16 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import "./BlockHeaderParser.sol";
 import "./MPTVerifier.sol";
 import "./ReceiptValidator.sol";
+import "./utils/ECDSA.sol";
 
 /// @title EscrowBatch
-/// @notice Multi-transfer escrow with first-come bid-backed execution. Bidders
-/// (nodes) commit to executing selected transfer rows by posting a
-/// bond. Bidders who prove every committed transfer by `expiresAt` recover
-/// their bond plus a pro-rata reward share. Expired bids forfeit their bond
-/// into the reward pool.
+/// @notice Multi-transfer escrow with first-come, signature-gated execution.
+/// Bidders (nodes) commit to executing selected transfer rows by proving they
+/// hold the enclave's blinded key: a BatchBondAuth signature over the bidding
+/// EOA and the claimed rows must recover to this escrow's `blindedSigner`.
+/// There is no node deposit; committing is free. Bidders who prove every
+/// committed transfer by `expiresAt` earn a pro-rata reward share. Expired
+/// bids simply release their rows for the next bidder.
 contract EscrowBatch {
     using SafeERC20 for IERC20;
 
@@ -47,11 +50,11 @@ contract EscrowBatch {
     }
 
     /// @dev A bid is a bidder's commitment to deliver the transfer rows stored in
-    /// `bidTransferIndexes[bidder]`, backed by `bondAmount` as security deposit
-    /// and valid until `expiresAt`. `startBlock` is the block at which the bid
-    /// was placed, used to reject proofs of transfers that happened before the bid existed.
+    /// `bidTransferIndexes[bidder]`, valid until `expiresAt`. Entry is gated by the
+    /// enclave's BatchBondAuth signature rather than a deposit. `startBlock` is the
+    /// block at which the bid was placed, used to reject proofs of transfers that
+    /// happened before the bid existed.
     struct Bid {
-        uint256 bondAmount;
         uint256 expiresAt;
         uint256 startBlock;
     }
@@ -69,7 +72,8 @@ contract EscrowBatch {
     error BidActive();
     error CancellationRequested();
     error BidderHasActiveBid();
-    error InsufficientBond();
+    error ZeroBlindedSigner();
+    error InvalidBondSignature();
     error ZeroAddress();
     error EmptyBatch();
     error EmptyBid();
@@ -88,6 +92,28 @@ contract EscrowBatch {
     error Reentrancy();
 
     // ============ Storage ============
+
+    // EIP-712 typed-data constants. The domain MUST match the off-chain signer
+    // (nomad `crates/types/src/contracts.rs`) byte-for-byte, otherwise the recovered
+    // signer differs and the bond signature check reverts.
+    bytes32 private constant _DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    // BatchBondAuth binds the enclave's authorization to the specific fresh EOA that bids
+    // and the exact rows it claims, so a signature cannot be replayed to commit a different
+    // executor or a different row subset in this escrow.
+    bytes32 private constant _BOND_TYPEHASH =
+        keccak256("BatchBondAuth(address bondingExecutor,uint256[] transferIndexes)");
+    bytes32 private constant _NAME_HASH = keccak256("MirageEscrow");
+    bytes32 private constant _VERSION_HASH = keccak256("1");
+
+    // Cached EIP-712 domain separator, bound to this contract + chain at deploy.
+    bytes32 private immutable _domainSeparator;
+
+    // Blinded enclave key P = G + s.B, stored as address(P). The enclave signs a
+    // BatchBondAuth with the matching scalar; ecrecover of a valid signature yields this
+    // address. Unlinkable to the global key G: with only P on-chain, an observer cannot tie
+    // this escrow to any enclave. Only the enclave can produce a signature that recovers to it.
+    address public immutable blindedSigner;
 
     address public immutable deployerAddress;
     address public immutable rewardAsset;
@@ -131,11 +157,22 @@ contract EscrowBatch {
         reentrancyStatus = NOT_ENTERED;
     }
 
-    constructor(address _rewardAsset, BatchTransfer[] memory _expectedTransfers, uint256 _currentRewardAmount) payable {
+    constructor(
+        address _rewardAsset,
+        BatchTransfer[] memory _expectedTransfers,
+        uint256 _currentRewardAmount,
+        address _blindedSigner
+    ) payable {
         if (_expectedTransfers.length == 0) revert EmptyBatch();
+        // Zero can't arise from a correct P = G + s.B derivation, so it signals an
+        // upstream derivation/encoding bug; reject it like a zero token address.
+        if (_blindedSigner == address(0)) revert ZeroBlindedSigner();
 
         rewardAsset = _rewardAsset;
+        blindedSigner = _blindedSigner;
         deployerAddress = msg.sender;
+        _domainSeparator =
+            keccak256(abi.encode(_DOMAIN_TYPEHASH, _NAME_HASH, _VERSION_HASH, block.chainid, address(this)));
 
         uint256 totalAmount;
         for (uint256 i = 0; i < _expectedTransfers.length;) {
@@ -162,6 +199,11 @@ contract EscrowBatch {
     }
 
     // ============ View functions ============
+
+    // Returns the EIP-712 domain separator for this escrow.
+    function domainSeparator() public view returns (bytes32) {
+        return _domainSeparator;
+    }
 
     function expectedTransferCount() external view returns (uint256) {
         return expectedTransfers.length;
@@ -268,23 +310,23 @@ contract EscrowBatch {
 
     // ============ Bidder entrypoints ============
 
-    /// @notice Place a bid on a subset of expected transfers by posting a bond.
-    /// @dev Bids are first-come commitments, not price auctions. `_bondAmount`
-    /// is a security deposit; posting more than the required bond does not
-    /// give priority and cannot outbid an existing active bid.
-    /// `transferIndexes` is a list, so a single bid can reserve many rows in one call.
-    function bid(uint256[] calldata transferIndexes, uint256 _bondAmount) external payable nonReentrant {
+    /// @notice Place a bid on a subset of expected transfers.
+    /// @dev Bids are first-come commitments, not price auctions, and are free: there
+    /// is no deposit. Entry is gated by the enclave's BatchBondAuth signature, which
+    /// must recover to this escrow's `blindedSigner` and binds both `msg.sender` and
+    /// the exact `transferIndexes` claimed, so it cannot be replayed for a different
+    /// executor or row subset. `transferIndexes` is a list, so a single bid can reserve
+    /// many rows in one call.
+    function bid(uint256[] calldata transferIndexes, bytes calldata bondSig) external nonReentrant {
         _handleExpiredBids();
-        _validateBidRequirements(transferIndexes, _bondAmount);
+        _validateBidRequirements(transferIndexes);
+        if (_recoverBondSigner(msg.sender, transferIndexes, bondSig) != blindedSigner) revert InvalidBondSignature();
 
-        uint256 transferAmount = _validateBidIndexes(transferIndexes);
-        uint256 requiredBond = _calculateRewardShare(transferAmount) / 2;
-        if (_bondAmount < requiredBond) revert InsufficientBond();
+        _validateBidIndexes(transferIndexes);
 
         _trackBidder(msg.sender);
 
         Bid storage placedBid = bids[msg.sender];
-        placedBid.bondAmount = _bondAmount;
         placedBid.expiresAt = block.timestamp + BID_DURATION;
         placedBid.startBlock = block.number;
         activeBidCount += 1;
@@ -297,13 +339,6 @@ contract EscrowBatch {
             unchecked {
                 ++i;
             }
-        }
-
-        if (rewardAsset == address(0)) {
-            if (msg.value != _bondAmount) revert IncorrectNativeAmount();
-        } else {
-            if (msg.value != 0) revert IncorrectNativeAmount();
-            IERC20(rewardAsset).safeTransferFrom(msg.sender, address(this), _bondAmount);
         }
     }
 
@@ -361,7 +396,31 @@ contract EscrowBatch {
             }
         }
 
-        _payoutBid(msg.sender, activeBid.bondAmount);
+        _payoutBid(msg.sender);
+    }
+
+    // ============ Internal: EIP-712 bond auth ============
+
+    // EIP-712 digest for a BatchBondAuth authorizing bondingExecutor to commit the given
+    // transfer rows on this escrow.
+    function _hashBondAuth(address bondingExecutor, uint256[] calldata transferIndexes)
+        internal
+        view
+        returns (bytes32)
+    {
+        bytes32 structHash = keccak256(
+            abi.encode(_BOND_TYPEHASH, bondingExecutor, keccak256(abi.encodePacked(transferIndexes)))
+        );
+        return keccak256(abi.encodePacked("\x19\x01", _domainSeparator, structHash));
+    }
+
+    // Recovers the signer of a BatchBondAuth authorizing bondingExecutor + transferIndexes.
+    function _recoverBondSigner(address bondingExecutor, uint256[] calldata transferIndexes, bytes calldata sig)
+        internal
+        view
+        returns (address)
+    {
+        return ECDSA.recover(_hashBondAuth(bondingExecutor, transferIndexes), sig);
     }
 
     // ============ Internal: funding ============
@@ -414,15 +473,14 @@ contract EscrowBatch {
         if (expectedTransfer.amount == 0) revert ZeroPaymentAmount();
     }
 
-    function _validateBidRequirements(uint256[] calldata transferIndexes, uint256 _bondAmount) internal view {
+    function _validateBidRequirements(uint256[] calldata transferIndexes) internal view {
         if (!funded) revert NotFunded();
         if (cancellationRequest) revert CancellationRequested();
         if (transferIndexes.length == 0) revert EmptyBid();
         if (bids[msg.sender].expiresAt > 0) revert BidderHasActiveBid();
-        if (_bondAmount == 0) revert InsufficientBond();
     }
 
-    function _validateBidIndexes(uint256[] calldata transferIndexes) internal view returns (uint256 transferAmount) {
+    function _validateBidIndexes(uint256[] calldata transferIndexes) internal view {
         bool[] memory seenTransfers = new bool[](expectedTransfers.length);
 
         for (uint256 i = 0; i < transferIndexes.length;) {
@@ -433,7 +491,6 @@ contract EscrowBatch {
             if (transferBidder[transferIndex] != address(0)) revert TransferStateConflict();
 
             seenTransfers[transferIndex] = true;
-            transferAmount += expectedTransfers[transferIndex].amount;
 
             unchecked {
                 ++i;
@@ -617,13 +674,8 @@ contract EscrowBatch {
             return false;
         }
 
-        uint256 forfeitedBond = activeBid.bondAmount;
+        // No node deposit: an expired bid simply frees its rows for the next bidder.
         _clearBid(bidder);
-
-        if (forfeitedBond > 0) {
-            currentRewardAmount += forfeitedBond;
-        }
-
         return true;
     }
 
@@ -702,7 +754,7 @@ contract EscrowBatch {
         return (currentRewardAmount * amount) / currentTransferAmount;
     }
 
-    function _payoutBid(address bidder, uint256 bidderBondAmount) internal {
+    function _payoutBid(address bidder) internal {
         uint256[] storage indexes = bidTransferIndexes[bidder];
         uint256 completedCount = indexes.length;
         bool isFinalCollection = completedTransferCount + completedCount == expectedTransfers.length;
@@ -724,7 +776,7 @@ contract EscrowBatch {
 
         uint256 transferAmountShare = isFinalCollection ? currentTransferAmount : completedAmount;
         uint256 rewardShare = isFinalCollection ? currentRewardAmount : _calculateRewardShare(completedAmount);
-        uint256 rewardPayout = bidderBondAmount + rewardShare;
+        uint256 rewardPayout = rewardShare;
         completedTransferCount += completedCount;
         currentTransferAmount -= transferAmountShare;
         currentRewardAmount -= rewardShare;
