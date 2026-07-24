@@ -28,7 +28,7 @@ Single ERC-20 transfer escrow. It verifies receipt inclusion and the expected ER
 
 ### `EscrowBatch.sol`
 
-Batch escrow for multiple expected transfers. Bidders reserve one or more transfer rows by posting a bond, prove every committed row, and receive reimbursements plus a pro-rata reward share. Expired reservations are released and forfeited bonds are added to the reward pool.
+Batch escrow for one or more expected transfers. A bidder uses a constructor-approved, one-time blinded signer to reserve selected rows without collateral. Each proved row settles permanently and receives principal reimbursement plus a value-weighted reward share; expired reservations automatically release only their unfinished rows.
 
 ### Proof libraries
 

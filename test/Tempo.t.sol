@@ -6,6 +6,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {EscrowBatch} from "../src/EscrowBatch.sol";
 import {EscrowERC20} from "../src/EscrowERC20.sol";
 import {ReceiptValidator} from "../src/ReceiptValidator.sol";
+import {BatchBondAuth} from "./helpers/BatchBondAuth.sol";
 import {BondAuth} from "./helpers/BondAuth.sol";
 
 contract ReceiptValidatorWrapper {
@@ -59,6 +60,7 @@ contract TempoTest is Test {
     // Fee payment (second log)
     address constant FEE_RECIPIENT = 0xfeEC000000000000000000000000000000000000;
     uint256 constant FEE_AMOUNT = 555;
+    uint256 constant BATCH_SIGNER_KEY = 42430;
 
     function setUp() public {
         vm.chainId(42429);
@@ -137,14 +139,13 @@ contract TempoTest is Test {
         transfers[1] = _erc20BatchTransfer(FEE_RECIPIENT, FEE_AMOUNT);
 
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, bytes32(uint256(1)));
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, _batchSigners());
 
         uint256[] memory transferIndexes = new uint256[](2);
         transferIndexes[0] = 0;
         transferIndexes[1] = 1;
 
-        vm.prank(FROM_ADDRESS);
-        escrow.bid(transferIndexes, 250e18);
+        _placeBatchBid(escrow, transferIndexes);
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
@@ -183,14 +184,13 @@ contract TempoTest is Test {
         transfers[1] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
 
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, bytes32(uint256(1)));
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, _batchSigners());
 
         uint256[] memory transferIndexes = new uint256[](2);
         transferIndexes[0] = 0;
         transferIndexes[1] = 1;
 
-        vm.prank(FROM_ADDRESS);
-        escrow.bid(transferIndexes, 250e18);
+        _placeBatchBid(escrow, transferIndexes);
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
@@ -230,14 +230,13 @@ contract TempoTest is Test {
         transfers[1] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
 
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, bytes32(uint256(1)));
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, _batchSigners());
 
         uint256[] memory transferIndexes = new uint256[](2);
         transferIndexes[0] = 0;
         transferIndexes[1] = 1;
 
-        vm.prank(FROM_ADDRESS);
-        escrow.bid(transferIndexes, 250e18);
+        _placeBatchBid(escrow, transferIndexes);
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
@@ -288,7 +287,7 @@ contract TempoTest is Test {
         transfers[0] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
 
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, bytes32(uint256(1)));
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, _batchSigners());
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
@@ -296,8 +295,7 @@ contract TempoTest is Test {
         uint256[] memory transferIndexes = new uint256[](1);
         transferIndexes[0] = 0;
 
-        vm.prank(FROM_ADDRESS);
-        escrow.bid(transferIndexes, 250e18);
+        _placeBatchBid(escrow, transferIndexes);
 
         EscrowBatch.BatchReceiptProof memory proof = EscrowBatch.BatchReceiptProof({
             blockHeader: BLOCK_HEADER,
@@ -336,5 +334,17 @@ contract TempoTest is Test {
             transferIndexes: transferIndexes,
             logIndexes: logIndexes
         });
+    }
+
+    function _batchSigners() internal pure returns (address[] memory signers) {
+        signers = new address[](1);
+        signers[0] = vm.addr(BATCH_SIGNER_KEY);
+    }
+
+    function _placeBatchBid(EscrowBatch escrow, uint256[] memory transferIndexes) internal {
+        bytes memory signature =
+            BatchBondAuth.sign(vm, BATCH_SIGNER_KEY, address(escrow), FROM_ADDRESS, transferIndexes);
+        vm.prank(FROM_ADDRESS);
+        escrow.bid(transferIndexes, signature);
     }
 }

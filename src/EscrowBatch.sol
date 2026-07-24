@@ -7,13 +7,13 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import "./BlockHeaderParser.sol";
 import "./MPTVerifier.sol";
 import "./ReceiptValidator.sol";
+import "./utils/ECDSA.sol";
 
 /// @title EscrowBatch
-/// @notice Multi-transfer escrow with first-come bid-backed execution. Bidders
-/// (nodes) commit to executing selected transfer rows by posting a bond.
+/// @notice Multi-transfer escrow with first-come, signature-gated execution.
+/// Bidders commit to selected rows using a one-time blinded Nomad signer.
 /// Proven rows settle permanently, while unfinished rows remain reserved until
-/// the bid expires. Expired bids forfeit only their remaining bond into the
-/// reward pool and release only their unfinished rows.
+/// the bid expires. Expired bids release only their unfinished rows.
 contract EscrowBatch {
     using SafeERC20 for IERC20;
 
@@ -48,15 +48,11 @@ contract EscrowBatch {
     }
 
     /// @dev A bid is a bidder's commitment to deliver the transfer rows stored in
-    /// `bidTransferIndexes[bidder]`, backed by a proportional security deposit
-    /// and valid until `expiresAt`. `startBlock` rejects proofs of transfers that
-    /// happened before the bid existed. Initial values remain fixed so partial
-    /// settlement cannot accumulate rounding errors across multiple calls.
+    /// `bidTransferIndexes[bidder]` and valid until `expiresAt`. Entry requires a
+    /// one-time blinded-signer authorization. `startBlock` rejects proofs of
+    /// transfers that happened before the bid existed.
     struct Bid {
-        uint256 initialBond;
-        uint256 remainingBond;
-        uint256 initialWeight;
-        uint256 remainingWeight;
+        uint256 remainingRows;
         uint256 expiresAt;
         uint256 startBlock;
     }
@@ -75,14 +71,19 @@ contract EscrowBatch {
     error BidNotExpired();
     error CancellationRequested();
     error BidderHasActiveBid();
-    error InsufficientBond();
+    error EmptyBlindedSigners();
+    error ZeroBlindedSigner();
+    error DuplicateBlindedSigner();
+    error InvalidBidSignature();
+    error BlindedSignerAlreadyUsed();
+    error TooManyRows();
+    error TooManyBlindedSigners();
     error ZeroAddress();
     error EmptyBatch();
     error EmptyBid();
     error ZeroRewardAmount();
     error ZeroPaymentAmount();
     error ZeroValueWeight();
-    error ZeroQuoteCommitment();
     error AlreadyFunded();
     error ETHTransferFailed();
     error IncorrectNativeAmount();
@@ -97,9 +98,16 @@ contract EscrowBatch {
 
     // ============ Storage ============
 
+    bytes32 private constant _DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    bytes32 private constant _BOND_TYPEHASH =
+        keccak256("BatchBondAuth(address bondingExecutor,uint256[] transferIndexes)");
+    bytes32 private constant _NAME_HASH = keccak256("MirageEscrow");
+    bytes32 private constant _VERSION_HASH = keccak256("1");
+    bytes32 private immutable _domainSeparator;
+
     address public immutable deployerAddress;
     address public immutable rewardAsset;
-    bytes32 public immutable quoteCommitment;
     uint256 public immutable totalTransferAmount;
     uint256 public immutable totalValueWeight;
 
@@ -112,10 +120,15 @@ contract EscrowBatch {
 
     uint256 public constant MAX_BLOCK_LOOKBACK = 256;
     uint256 public constant BID_DURATION = 5 minutes;
+    uint256 public constant MAX_ROWS = 256;
+    uint256 public constant MAX_BLINDED_SIGNERS = 256;
     uint256 private constant NOT_ENTERED = 1;
     uint256 private constant ENTERED = 2;
 
     BatchTransfer[] public expectedTransfers;
+    address[] private blindedSigners;
+    mapping(address => bool) public isBlindedSigner;
+    mapping(address => bool) public blindedSignerUsed;
 
     mapping(address => Bid) public bids;
     mapping(address => uint256[]) private bidTransferIndexes;
@@ -154,14 +167,29 @@ contract EscrowBatch {
         address _rewardAsset,
         BatchTransfer[] memory _expectedTransfers,
         uint256 _currentRewardAmount,
-        bytes32 _quoteCommitment
+        address[] memory _blindedSigners
     ) payable {
         if (_expectedTransfers.length == 0) revert EmptyBatch();
-        if (_quoteCommitment == bytes32(0)) revert ZeroQuoteCommitment();
+        if (_expectedTransfers.length > MAX_ROWS) revert TooManyRows();
+        if (_blindedSigners.length == 0) revert EmptyBlindedSigners();
+        if (_blindedSigners.length > MAX_BLINDED_SIGNERS) revert TooManyBlindedSigners();
 
         rewardAsset = _rewardAsset;
-        quoteCommitment = _quoteCommitment;
         deployerAddress = msg.sender;
+        _domainSeparator =
+            keccak256(abi.encode(_DOMAIN_TYPEHASH, _NAME_HASH, _VERSION_HASH, block.chainid, address(this)));
+
+        for (uint256 i = 0; i < _blindedSigners.length;) {
+            address signer = _blindedSigners[i];
+            if (signer == address(0)) revert ZeroBlindedSigner();
+            if (isBlindedSigner[signer]) revert DuplicateBlindedSigner();
+            isBlindedSigner[signer] = true;
+            blindedSigners.push(signer);
+
+            unchecked {
+                ++i;
+            }
+        }
 
         uint256 totalAmount;
         uint256 totalWeight;
@@ -192,6 +220,19 @@ contract EscrowBatch {
 
     // ============ View functions ============
 
+    function domainSeparator() external view returns (bytes32) {
+        return _domainSeparator;
+    }
+
+    function blindedSignerCount() external view returns (uint256) {
+        return blindedSigners.length;
+    }
+
+    function blindedSignerAt(uint256 index) external view returns (address signer, bool used) {
+        signer = blindedSigners[index];
+        used = blindedSignerUsed[signer];
+    }
+
     function expectedTransferCount() external view returns (uint256) {
         return expectedTransfers.length;
     }
@@ -212,14 +253,16 @@ contract EscrowBatch {
         return bidTransferIndexes[bidder][position];
     }
 
-    /// @notice Whether any bid still requires settlement or explicit expiry.
-    /// @dev Previously this scanned every bidder and returned true only when at
-    /// least one bid's five-minute deadline had not passed. This O(1) check also
-    /// returns true for such bids, but expired bids remain outstanding until
-    /// `expireBid` or `expireBids` releases them, matching the state that blocks
-    /// cancellation.
+    /// @notice Whether at least one bid is still inside its execution window.
     function is_bonded() public view returns (bool) {
-        return activeBidCount != 0;
+        for (uint256 i = 0; i < bidders.length;) {
+            if (bids[bidders[i]].expiresAt >= block.timestamp) return true;
+
+            unchecked {
+                ++i;
+            }
+        }
+        return false;
     }
 
     // ============ Deployer entrypoints ============
@@ -247,6 +290,7 @@ contract EscrowBatch {
         if (!funded) revert NotFunded();
 
         cancellationRequest = true;
+        _handleExpiredBids();
         if (activeBidCount > 0) revert BidActive();
 
         uint256 rewardAmount = currentRewardAmount;
@@ -291,26 +335,24 @@ contract EscrowBatch {
 
     // ============ Bidder entrypoints ============
 
-    /// @notice Place a bid on a subset of expected transfers by posting a bond.
-    /// @dev Bids are first-come commitments, not price auctions. `_bondAmount`
-    /// is a security deposit; posting more than the required bond does not
-    /// give priority and cannot outbid an existing active bid.
-    /// `transferIndexes` is a list, so a single bid can reserve many rows in one call.
-    function bid(uint256[] calldata transferIndexes, uint256 _bondAmount) external payable nonReentrant {
-        _releaseExpiredBid(msg.sender);
-        _validateBidRequirements(transferIndexes, _bondAmount);
+    /// @notice Place a free bid on a subset of expected transfers.
+    /// @dev The signature binds this escrow, chain, bidder, and exact row indexes.
+    /// Its recovered blinded signer must be constructor-approved and unused.
+    function bid(uint256[] calldata transferIndexes, bytes calldata bidSignature) external nonReentrant {
+        _handleExpiredBids();
+        _validateBidRequirements(transferIndexes);
 
-        uint256 bidWeight = _validateBidIndexes(transferIndexes);
-        uint256 requiredBond = _calculateRewardShare(bidWeight) / 2;
-        if (_bondAmount < requiredBond) revert InsufficientBond();
+        address signer = ECDSA.recover(_hashBidAuthorization(msg.sender, transferIndexes), bidSignature);
+        if (!isBlindedSigner[signer]) revert InvalidBidSignature();
+        if (blindedSignerUsed[signer]) revert BlindedSignerAlreadyUsed();
+
+        _validateBidIndexes(transferIndexes);
+        blindedSignerUsed[signer] = true;
 
         _trackBidder(msg.sender);
 
         Bid storage placedBid = bids[msg.sender];
-        placedBid.initialBond = _bondAmount;
-        placedBid.remainingBond = _bondAmount;
-        placedBid.initialWeight = bidWeight;
-        placedBid.remainingWeight = bidWeight;
+        placedBid.remainingRows = transferIndexes.length;
         placedBid.expiresAt = block.timestamp + BID_DURATION;
         placedBid.startBlock = block.number;
         activeBidCount += 1;
@@ -324,13 +366,6 @@ contract EscrowBatch {
                 ++i;
             }
         }
-
-        if (rewardAsset == address(0)) {
-            if (msg.value != _bondAmount) revert IncorrectNativeAmount();
-        } else {
-            if (msg.value != 0) revert IncorrectNativeAmount();
-            IERC20(rewardAsset).safeTransferFrom(msg.sender, address(this), _bondAmount);
-        }
     }
 
     /// @notice Permanently settle a non-empty proved subset of the caller's active bid.
@@ -338,6 +373,7 @@ contract EscrowBatch {
     /// completing all state changes, settlement attempts to pay each asset directly.
     /// Only a failed asset payout is retained in `claimable` for later withdrawal.
     function collect(BatchProof[] calldata proofs) external nonReentrant {
+        _handleExpiredBids();
         Bid storage activeBid = bids[msg.sender];
         if (!funded) revert NotFunded();
         if (activeBid.expiresAt == 0 || block.timestamp > activeBid.expiresAt) revert OnlyActiveBidder();
@@ -407,9 +443,9 @@ contract EscrowBatch {
         _sendAsset(asset, msg.sender, amount);
     }
 
-    /// @notice Release one expired bid's unfinished rows and forfeit its remaining bond.
-    /// @dev Expiry is explicit and bounded by the number of rows in this bid. This
-    /// avoids scanning every bidder during unrelated bid, collect, or cancellation calls.
+    /// @notice Release one expired bid's unfinished rows.
+    /// @dev This permissionless entrypoint allows proactive cleanup even though
+    /// normal bid, collect, and cancellation calls also clear expired bids.
     function expireBid(address bidder) external nonReentrant {
         if (!_releaseExpiredBid(bidder)) revert BidNotExpired();
     }
@@ -429,13 +465,25 @@ contract EscrowBatch {
         }
     }
 
+    // ============ Internal: bid authorization ============
+
+    function _hashBidAuthorization(address bondingExecutor, uint256[] calldata transferIndexes)
+        internal
+        view
+        returns (bytes32)
+    {
+        bytes32 structHash =
+            keccak256(abi.encode(_BOND_TYPEHASH, bondingExecutor, keccak256(abi.encodePacked(transferIndexes))));
+        return keccak256(abi.encodePacked("\x19\x01", _domainSeparator, structHash));
+    }
+
     // ============ Internal: funding ============
 
     function _fund(uint256 _currentRewardAmount) internal {
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
 
         // msg.value must cover any native transfers in the batch plus, if the
-        // bond/reward currency is ETH, the reward amount itself.
+        // reward currency is ETH, the reward amount itself.
         uint256 nativeOwed = totalAssetPaymentAmount[address(0)];
         if (rewardAsset == address(0)) {
             nativeOwed += _currentRewardAmount;
@@ -481,15 +529,14 @@ contract EscrowBatch {
         if (expectedTransfer.valueWeight == 0) revert ZeroValueWeight();
     }
 
-    function _validateBidRequirements(uint256[] calldata transferIndexes, uint256 _bondAmount) internal view {
+    function _validateBidRequirements(uint256[] calldata transferIndexes) internal view {
         if (!funded) revert NotFunded();
         if (cancellationRequest) revert CancellationRequested();
         if (transferIndexes.length == 0) revert EmptyBid();
         if (bids[msg.sender].expiresAt > 0) revert BidderHasActiveBid();
-        if (_bondAmount == 0) revert InsufficientBond();
     }
 
-    function _validateBidIndexes(uint256[] calldata transferIndexes) internal view returns (uint256 bidWeight) {
+    function _validateBidIndexes(uint256[] calldata transferIndexes) internal view {
         bool[] memory seenTransfers = new bool[](expectedTransfers.length);
 
         for (uint256 i = 0; i < transferIndexes.length;) {
@@ -500,7 +547,6 @@ contract EscrowBatch {
             if (transferBidder[transferIndex] != address(0)) revert TransferStateConflict();
 
             seenTransfers[transferIndex] = true;
-            bidWeight += expectedTransfers[transferIndex].valueWeight;
 
             unchecked {
                 ++i;
@@ -678,18 +724,26 @@ contract EscrowBatch {
 
     // ============ Internal: bid lifecycle ============
 
+    /// @dev Automatically release every expired bid. Blinded signers cap who
+    /// can create bids, while MAX_ROWS and MAX_BLINDED_SIGNERS bound this scan.
+    function _handleExpiredBids() internal {
+        uint256 i;
+        while (i < bidders.length) {
+            if (!_releaseExpiredBid(bidders[i])) {
+                unchecked {
+                    ++i;
+                }
+            }
+        }
+    }
+
     function _releaseExpiredBid(address bidder) internal returns (bool released) {
         Bid storage activeBid = bids[bidder];
         if (activeBid.expiresAt == 0 || block.timestamp <= activeBid.expiresAt) {
             return false;
         }
 
-        uint256 forfeitedBond = activeBid.remainingBond;
         _clearBid(bidder);
-
-        if (forfeitedBond > 0) {
-            currentRewardAmount += forfeitedBond;
-        }
 
         return true;
     }
@@ -798,24 +852,18 @@ contract EscrowBatch {
         bool isFinalCollection = completedTransferCount + provedTransferCount == expectedTransfers.length;
         uint256 rewardShare = isFinalCollection ? currentRewardAmount : _calculateRewardShare(completedWeight);
 
-        uint256 newRemainingWeight = activeBid.remainingWeight - completedWeight;
-        uint256 newRemainingBond = newRemainingWeight == 0
-            ? 0
-            : Math.mulDiv(activeBid.initialBond, newRemainingWeight, activeBid.initialWeight, Math.Rounding.Ceil);
-        uint256 releasedBond = activeBid.remainingBond - newRemainingBond;
-        activeBid.remainingWeight = newRemainingWeight;
-        activeBid.remainingBond = newRemainingBond;
+        activeBid.remainingRows -= provedTransferCount;
 
         completedTransferCount += provedTransferCount;
         currentTransferAmount -= completedAmount;
         currentValueWeight -= completedWeight;
         currentRewardAmount -= rewardShare;
 
-        if (releasedBond + rewardShare > 0) {
-            assetCount = _addAssetAmount(assets, amounts, assetCount, rewardAsset, releasedBond + rewardShare);
+        if (rewardShare > 0) {
+            assetCount = _addAssetAmount(assets, amounts, assetCount, rewardAsset, rewardShare);
         }
 
-        if (newRemainingWeight == 0) {
+        if (activeBid.remainingRows == 0) {
             _clearBid(bidder);
         }
 
