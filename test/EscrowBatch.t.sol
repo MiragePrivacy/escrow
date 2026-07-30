@@ -214,8 +214,7 @@ contract EscrowBatchTest is Test {
     }
 
     function testConstructorRejectsTooManyRows() public {
-        EscrowBatch.BatchTransfer[] memory transfers =
-            new EscrowBatch.BatchTransfer[](escrow.MAX_ROWS() + 1);
+        EscrowBatch.BatchTransfer[] memory transfers = new EscrowBatch.BatchTransfer[](escrow.MAX_ROWS() + 1);
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBatch.TooManyRows.selector);
@@ -672,6 +671,18 @@ contract EscrowBatchTest is Test {
 
         _placeBidAs(ethEscrow, bidder, _fullIndexes());
         assertEq(address(ethEscrow).balance, REWARD_AMOUNT);
+    }
+
+    function testBidRejectsAttachedValue() public {
+        uint256[] memory indexes = _fullIndexes();
+        bytes memory signature = _nextBidSignature(address(escrow), bidder, indexes);
+
+        vm.deal(bidder, 1 ether);
+        vm.prank(bidder);
+        (bool succeeded,) =
+            address(escrow).call{value: 1}(abi.encodeWithSelector(escrow.bid.selector, indexes, signature));
+
+        assertFalse(succeeded);
     }
 
     function testNativeRewardCancelAndWithdrawRefundsEth() public {

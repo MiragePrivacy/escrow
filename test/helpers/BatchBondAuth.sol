@@ -3,12 +3,11 @@ pragma solidity ^0.8.30;
 
 import {Vm} from "forge-std/Test.sol";
 
-// Shared helper for producing the enclave's ECDH-gate signature in batch escrow tests.
+// Shared helper for producing one-time blinded-signer bid authorizations in tests.
 //
-// EscrowBatch stores `blindedSigner` = address(P), the blinded enclave key. The enclave
-// signs a BatchBondAuth over the bidding EOA and the claimed rows with the matching scalar
-// p; ecrecover of a valid signature yields blindedSigner. Here the "enclave" is a foundry
-// wallet whose address is used as blindedSigner, so vm.sign reproduces that recovery.
+// The signature binds the execution EOA and exact selected rows to one escrow
+// and chain through EIP-712. A valid signature recovers to one of the blinded
+// signer addresses committed when the batch escrow was deployed.
 library BatchBondAuth {
     bytes32 private constant _DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
@@ -31,14 +30,14 @@ library BatchBondAuth {
         return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
     }
 
-    // Signs the BatchBondAuth digest with `enclaveKey`, yielding a signature that recovers to
-    // vm.addr(enclaveKey) -- the escrow's blindedSigner.
-    function sign(Vm vm, uint256 enclaveKey, address escrow, address bondingExecutor, uint256[] memory transferIndexes)
+    // Signs the digest with one derived blinded key. The matching signer can
+    // authorize exactly one accepted bid in the target escrow.
+    function sign(Vm vm, uint256 signerKey, address escrow, address bondingExecutor, uint256[] memory transferIndexes)
         internal
         view
         returns (bytes memory)
     {
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(enclaveKey, digest(escrow, bondingExecutor, transferIndexes));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerKey, digest(escrow, bondingExecutor, transferIndexes));
         return abi.encodePacked(r, s, v);
     }
 }
