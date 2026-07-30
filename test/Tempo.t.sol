@@ -137,7 +137,7 @@ contract TempoTest is Test {
         transfers[1] = _erc20BatchTransfer(FEE_RECIPIENT, FEE_AMOUNT);
 
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18);
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, bytes32(uint256(1)));
 
         uint256[] memory transferIndexes = new uint256[](2);
         transferIndexes[0] = 0;
@@ -183,7 +183,7 @@ contract TempoTest is Test {
         transfers[1] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
 
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18);
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, bytes32(uint256(1)));
 
         uint256[] memory transferIndexes = new uint256[](2);
         transferIndexes[0] = 0;
@@ -219,6 +219,65 @@ contract TempoTest is Test {
         escrow.collect(proofs);
     }
 
+    function testRejectsDuplicateReceiptLogAcrossCollectCalls() public {
+        address deployer = makeAddr("deployer");
+
+        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
+        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
+
+        EscrowBatch.BatchTransfer[] memory transfers = new EscrowBatch.BatchTransfer[](2);
+        transfers[0] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
+        transfers[1] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
+
+        vm.prank(deployer);
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, bytes32(uint256(1)));
+
+        uint256[] memory transferIndexes = new uint256[](2);
+        transferIndexes[0] = 0;
+        transferIndexes[1] = 1;
+
+        vm.prank(FROM_ADDRESS);
+        escrow.bid(transferIndexes, 250e18);
+
+        vm.roll(BLOCK_NUMBER + 10);
+        vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
+
+        EscrowBatch.BatchReceiptProof memory proof = EscrowBatch.BatchReceiptProof({
+            blockHeader: BLOCK_HEADER,
+            receiptRlp: RECEIPT_RLP,
+            proofNodes: PROOF_NODES,
+            receiptPath: RECEIPT_PATH,
+            targetBlockNumber: BLOCK_NUMBER
+        });
+        uint256[] memory logIndexes = new uint256[](1);
+        logIndexes[0] = 0;
+
+        uint256[] memory firstTransferIndex = new uint256[](1);
+        firstTransferIndex[0] = 0;
+        EscrowBatch.BatchProof[] memory proofs = new EscrowBatch.BatchProof[](1);
+        proofs[0] = _erc20BatchProof(proof, firstTransferIndex, logIndexes);
+
+        vm.prank(FROM_ADDRESS);
+        escrow.collect(proofs);
+
+        bytes32 proofId =
+            keccak256(abi.encode(keccak256("MIRAGE_ERC20_PROOF_V1"), BLOCK_NUMBER, RECEIPT_PATH, uint256(0)));
+        assertTrue(escrow.consumedProofItems(proofId));
+        assertTrue(escrow.transferCompleted(0));
+        assertFalse(escrow.transferCompleted(1));
+
+        uint256[] memory secondTransferIndex = new uint256[](1);
+        secondTransferIndex[0] = 1;
+        proofs[0] = _erc20BatchProof(proof, secondTransferIndex, logIndexes);
+
+        vm.prank(FROM_ADDRESS);
+        vm.expectRevert(EscrowBatch.DuplicateProofItem.selector);
+        escrow.collect(proofs);
+
+        assertFalse(escrow.transferCompleted(1));
+        assertEq(escrow.transferBidder(1), FROM_ADDRESS);
+    }
+
     function testRejectsProofBeforeBid() public {
         address deployer = makeAddr("deployer");
 
@@ -229,7 +288,7 @@ contract TempoTest is Test {
         transfers[0] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
 
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18);
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, bytes32(uint256(1)));
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
@@ -262,7 +321,7 @@ contract TempoTest is Test {
         pure
         returns (EscrowBatch.BatchTransfer memory)
     {
-        return EscrowBatch.BatchTransfer({asset: TOKEN, recipient: recipient, amount: amount});
+        return EscrowBatch.BatchTransfer({asset: TOKEN, recipient: recipient, amount: amount, valueWeight: amount});
     }
 
     function _erc20BatchProof(

@@ -109,13 +109,15 @@ contract USDTCompatibilityTest is Test {
 
     function testBatchFundingBidAndWithdrawalAcceptNoReturnData() public {
         EscrowBatch.BatchTransfer[] memory transfers = new EscrowBatch.BatchTransfer[](1);
-        transfers[0] = EscrowBatch.BatchTransfer({asset: address(token), recipient: recipient, amount: PAYMENT_AMOUNT});
+        transfers[0] = EscrowBatch.BatchTransfer({
+            asset: address(token), recipient: recipient, amount: PAYMENT_AMOUNT, valueWeight: PAYMENT_AMOUNT
+        });
 
         uint256 escrowAmount = PAYMENT_AMOUNT + REWARD_AMOUNT;
         vm.startPrank(deployer);
         address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow, escrowAmount);
-        EscrowBatch escrow = new EscrowBatch(address(token), transfers, REWARD_AMOUNT);
+        EscrowBatch escrow = new EscrowBatch(address(token), transfers, REWARD_AMOUNT, bytes32(uint256(1)));
         vm.stopPrank();
 
         assertTrue(escrow.funded());
@@ -131,6 +133,7 @@ contract USDTCompatibilityTest is Test {
         assertEq(token.balanceOf(address(escrow)), escrowAmount + BOND_AMOUNT);
 
         vm.warp(block.timestamp + escrow.BID_DURATION() + 1);
+        escrow.expireBid(bidder);
         uint256 deployerBalanceBefore = token.balanceOf(deployer);
         vm.prank(deployer);
         escrow.cancelAndWithdraw();
