@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.30;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {EscrowERC20Delayed} from "../src/EscrowERC20Delayed.sol";
+import {BondAuth} from "./helpers/BondAuth.sol";
 
-contract MockERC20 {
+contract MockDelayedERC20 {
     mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
 
     event Transfer(address indexed from, address indexed to, uint256 value);
 
@@ -21,257 +21,255 @@ contract MockERC20 {
         emit Transfer(msg.sender, to, amount);
         return true;
     }
-
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
-        require(balanceOf[from] >= amount, "Insufficient balance");
-        require(allowance[from][msg.sender] >= amount, "Insufficient allowance");
-        balanceOf[from] -= amount;
-        balanceOf[to] += amount;
-        allowance[from][msg.sender] -= amount;
-        emit Transfer(from, to, amount);
-        return true;
-    }
-
-    function approve(address spender, uint256 amount) external returns (bool) {
-        allowance[msg.sender][spender] = amount;
-        return true;
-    }
 }
 
 contract EscrowERC20DelayedTest is Test {
     EscrowERC20Delayed public escrow;
-    MockERC20 public token;
+    MockDelayedERC20 public token;
     address public deployer;
     address public executor;
     address public recipient;
     address public other;
+    Vm.Wallet enclave;
 
     uint256 constant EXPECTED_AMOUNT = 1000e18;
     uint256 constant REWARD_AMOUNT = 500e18;
-    uint256 constant FUND_REQUIRED = EXPECTED_AMOUNT + REWARD_AMOUNT;
-    uint256 constant BOND_AMOUNT = 250e18; // Half of reward amount
+    uint256 constant EXECUTION_POT_AMOUNT = 25e18;
+    uint256 constant FUND_REQUIRED = EXPECTED_AMOUNT + REWARD_AMOUNT + EXECUTION_POT_AMOUNT;
 
     function setUp() public {
         deployer = makeAddr("deployer");
         executor = makeAddr("executor");
         recipient = makeAddr("recipient");
         other = makeAddr("other");
+        enclave = vm.createWallet("enclave");
 
         vm.startPrank(deployer);
-        token = new MockERC20();
+        token = new MockDelayedERC20();
         token.mint(deployer, 10000e18);
-        escrow = new EscrowERC20Delayed(address(token), recipient, EXPECTED_AMOUNT, REWARD_AMOUNT);
+        escrow = new EscrowERC20Delayed(
+            address(token), recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, EXECUTION_POT_AMOUNT
+        );
         vm.stopPrank();
+    }
 
-        token.mint(executor, 10000e18);
-        token.mint(other, 10000e18);
+    function _sig(address escrowAddress, address bondingExecutor) internal view returns (bytes memory) {
+        return BondAuth.sign(vm, enclave.privateKey, escrowAddress, bondingExecutor);
+    }
+
+    function _fund() internal {
+        vm.prank(deployer);
+        token.transfer(address(escrow), FUND_REQUIRED);
+    }
+
+    function _fundAndBond() internal {
+        _fund();
+        vm.prank(executor);
+        escrow.bond(_sig(address(escrow), executor));
+    }
+
+    function _dummyProof() internal pure returns (EscrowERC20Delayed.ReceiptProof memory) {
+        return EscrowERC20Delayed.ReceiptProof({
+            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
+        });
     }
 
     function testConstructorDelayedState() public view {
+        assertEq(escrow.tokenContract(), address(token));
         assertEq(escrow.expectedRecipient(), recipient);
         assertEq(escrow.expectedAmount(), EXPECTED_AMOUNT);
+        assertEq(escrow.blindedSigner(), enclave.addr);
+        assertEq(escrow.currentPaymentAmount(), EXPECTED_AMOUNT);
         assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT);
         assertEq(escrow.originalRewardAmount(), REWARD_AMOUNT);
-        // Escrow holds no tokens yet: stored state 1, balance short -> view returns 0.
+        assertEq(escrow.executionPotAmount(), EXECUTION_POT_AMOUNT);
+        assertEq(escrow.bondPot(), 0);
         assertEq(escrow.funded(), 0);
-        assertEq(token.balanceOf(address(escrow)), 0);
     }
 
-    function testConstructorZeroToken() public {
+    function testConstructorRejectsZeroAddresses() public {
+        vm.startPrank(deployer);
         vm.expectRevert(EscrowERC20Delayed.ZeroAddress.selector);
-        new EscrowERC20Delayed(address(0), recipient, EXPECTED_AMOUNT, REWARD_AMOUNT);
-    }
-
-    function testConstructorZeroRecipient() public {
+        new EscrowERC20Delayed(
+            address(0), recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, EXECUTION_POT_AMOUNT
+        );
         vm.expectRevert(EscrowERC20Delayed.ZeroAddress.selector);
-        new EscrowERC20Delayed(address(token), address(0), EXPECTED_AMOUNT, REWARD_AMOUNT);
+        new EscrowERC20Delayed(
+            address(token), address(0), EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, EXECUTION_POT_AMOUNT
+        );
+        vm.expectRevert(EscrowERC20Delayed.ZeroAddress.selector);
+        new EscrowERC20Delayed(
+            address(token), recipient, EXPECTED_AMOUNT, address(0), REWARD_AMOUNT, EXECUTION_POT_AMOUNT
+        );
+        vm.stopPrank();
     }
 
-    function testConstructorZeroAmounts() public {
+    function testConstructorRejectsZeroPaymentOrReward() public {
+        vm.startPrank(deployer);
         vm.expectRevert(EscrowERC20Delayed.ZeroAmount.selector);
-        new EscrowERC20Delayed(address(token), recipient, 0, REWARD_AMOUNT);
+        new EscrowERC20Delayed(address(token), recipient, 0, enclave.addr, REWARD_AMOUNT, EXECUTION_POT_AMOUNT);
         vm.expectRevert(EscrowERC20Delayed.ZeroRewardAmount.selector);
-        new EscrowERC20Delayed(address(token), recipient, EXPECTED_AMOUNT, 0);
+        new EscrowERC20Delayed(address(token), recipient, EXPECTED_AMOUNT, enclave.addr, 0, EXECUTION_POT_AMOUNT);
+        vm.stopPrank();
     }
 
-    function testFundedViewUpgradesWithBalance() public {
-        assertEq(escrow.funded(), 0);
-
+    function testFundedRequiresPaymentRewardAndExecutionPot() public {
         vm.prank(deployer);
         token.transfer(address(escrow), FUND_REQUIRED - 1);
-        assertEq(escrow.funded(), 0, "short balance stays 0");
+        assertEq(escrow.funded(), 0);
 
         vm.prank(deployer);
         token.transfer(address(escrow), 1);
-        assertEq(escrow.funded(), 2, "exact balance flips to 2");
-    }
-
-    function testBondRevertsBeforeTransfer() public {
-        vm.startPrank(executor);
-        token.approve(address(escrow), BOND_AMOUNT);
-        vm.expectRevert(EscrowERC20Delayed.NotFunded.selector);
-        escrow.bond(BOND_AMOUNT);
-        vm.stopPrank();
-    }
-
-    function testBondRevertsOnShortBalance() public {
-        vm.prank(deployer);
-        token.transfer(address(escrow), FUND_REQUIRED - 1);
-
-        vm.startPrank(executor);
-        token.approve(address(escrow), BOND_AMOUNT);
-        vm.expectRevert(EscrowERC20Delayed.NotFunded.selector);
-        escrow.bond(BOND_AMOUNT);
-        vm.stopPrank();
-    }
-
-    function testBondUpgradesStateAndSucceeds() public {
-        vm.prank(deployer);
-        token.transfer(address(escrow), FUND_REQUIRED);
-
-        vm.startPrank(executor);
-        token.approve(address(escrow), BOND_AMOUNT);
-        escrow.bond(BOND_AMOUNT);
-        vm.stopPrank();
-
-        assertEq(escrow.bondedExecutor(), executor);
-        assertEq(escrow.bondAmount(), BOND_AMOUNT);
-        assertEq(escrow.executionDeadline(), block.timestamp + 5 minutes);
-        assertTrue(escrow.is_bonded());
         assertEq(escrow.funded(), 2);
     }
 
-    function testBondInsufficientAmount() public {
-        vm.prank(deployer);
-        token.transfer(address(escrow), FUND_REQUIRED);
-
-        vm.startPrank(executor);
-        token.approve(address(escrow), BOND_AMOUNT);
-        vm.expectRevert(EscrowERC20Delayed.InsufficientBond.selector);
-        escrow.bond(BOND_AMOUNT - 1);
-        vm.stopPrank();
+    function testBondRejectsUnfundedEscrow() public {
+        vm.prank(executor);
+        vm.expectRevert(EscrowERC20Delayed.NotFunded.selector);
+        escrow.bond(_sig(address(escrow), executor));
     }
 
-    function testBondCancellationRequested() public {
-        vm.prank(deployer);
-        token.transfer(address(escrow), FUND_REQUIRED);
+    function testBondPaysTokenExecutionPot() public {
+        _fund();
+        uint256 executorBefore = token.balanceOf(executor);
 
-        vm.prank(deployer);
-        escrow.requestCancellation();
+        vm.prank(executor);
+        escrow.bond(_sig(address(escrow), executor));
 
-        vm.startPrank(executor);
-        token.approve(address(escrow), BOND_AMOUNT);
-        vm.expectRevert(EscrowERC20Delayed.CancellationRequested.selector);
-        escrow.bond(BOND_AMOUNT);
-        vm.stopPrank();
+        assertEq(escrow.bondedExecutor(), executor);
+        assertEq(escrow.executionDeadline(), block.timestamp + 5 minutes);
+        assertEq(escrow.bondStartBlock(), block.number);
+        assertTrue(escrow.is_bonded());
+        assertEq(escrow.executionPotAmount(), 0);
+        assertEq(token.balanceOf(executor), executorBefore + EXECUTION_POT_AMOUNT);
+        assertEq(token.balanceOf(address(escrow)), EXPECTED_AMOUNT + REWARD_AMOUNT);
+        assertEq(escrow.funded(), 2);
+    }
+
+    function testBondRequiresBlindedSignerAuthorization() public {
+        _fund();
+
+        vm.prank(executor);
+        vm.expectRevert(EscrowERC20Delayed.InvalidBondSignature.selector);
+        escrow.bond(_sig(address(escrow), other));
     }
 
     function testDoubleBondingPrevented() public {
         _fundAndBond();
 
-        vm.startPrank(other);
-        token.approve(address(escrow), BOND_AMOUNT);
+        vm.prank(other);
         vm.expectRevert(EscrowERC20Delayed.ExecutorAlreadyBonded.selector);
-        escrow.bond(BOND_AMOUNT);
-        vm.stopPrank();
+        escrow.bond(_sig(address(escrow), other));
     }
 
-    function testBondAfterDeadlinePassed() public {
+    function testExpiredBondCanBeRetriedWithoutRepayingPot() public {
         _fundAndBond();
-
         vm.warp(block.timestamp + 6 minutes);
 
-        // Expired bond folds BOND_AMOUNT into currentRewardAmount; new floor is updated/2.
-        uint256 newReward = REWARD_AMOUNT + BOND_AMOUNT;
-        uint256 newBondFloor = newReward / 2;
-
-        vm.startPrank(other);
-        token.approve(address(escrow), newBondFloor);
-        escrow.bond(newBondFloor);
-        vm.stopPrank();
+        uint256 otherBefore = token.balanceOf(other);
+        vm.prank(other);
+        escrow.bond(_sig(address(escrow), other));
 
         assertEq(escrow.bondedExecutor(), other);
-        assertEq(escrow.currentRewardAmount(), newReward);
-        assertEq(escrow.bondAmount(), newBondFloor);
+        assertEq(token.balanceOf(other), otherBefore);
     }
 
-    function testRequestCancellationOnlyDeployer() public {
+    function testCancellationBlocksBond() public {
+        _fund();
+        vm.prank(deployer);
+        escrow.requestCancellation();
+
+        vm.prank(executor);
+        vm.expectRevert(EscrowERC20Delayed.CancellationRequested.selector);
+        escrow.bond(_sig(address(escrow), executor));
+    }
+
+    function testRequestCancellationAndResumeOnlyDeployer() public {
         vm.prank(executor);
         vm.expectRevert(EscrowERC20Delayed.OnlyDeployer.selector);
         escrow.requestCancellation();
-    }
 
-    function testResume() public {
-        vm.startPrank(deployer);
+        vm.prank(deployer);
         escrow.requestCancellation();
         assertTrue(escrow.cancellationRequest());
-        escrow.resume();
-        assertFalse(escrow.cancellationRequest());
-        vm.stopPrank();
-    }
 
-    function testCollectNotFundedWhenDelayedShort() public {
-        EscrowERC20Delayed.ReceiptProof memory dummy = EscrowERC20Delayed.ReceiptProof({
-            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
-        });
-        vm.prank(executor);
-        vm.expectRevert(EscrowERC20Delayed.NotFunded.selector);
-        escrow.collect(dummy, block.number - 1);
-    }
-
-    function testCollectNotBondedExecutor() public {
-        _fundAndBond();
-
-        EscrowERC20Delayed.ReceiptProof memory dummy = EscrowERC20Delayed.ReceiptProof({
-            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
-        });
-        vm.prank(other);
-        vm.expectRevert(EscrowERC20Delayed.OnlyBondedExecutor.selector);
-        escrow.collect(dummy, block.number - 1);
-    }
-
-    function testCancelAndWithdrawSweepsBalance() public {
-        vm.prank(deployer);
-        token.transfer(address(escrow), FUND_REQUIRED / 2);
-
-        uint256 before = token.balanceOf(deployer);
-
-        vm.prank(deployer);
-        escrow.cancelAndWithdraw();
-
-        assertEq(token.balanceOf(address(escrow)), 0);
-        assertEq(token.balanceOf(deployer), before + FUND_REQUIRED / 2);
-        // Stored state is 0 and cancellationRequest cleared so the escrow can be reinit-ed.
-        assertEq(escrow.funded(), 0);
-        assertFalse(escrow.cancellationRequest());
-    }
-
-    function testCancelAndWithdrawOnlyDeployer() public {
         vm.prank(executor);
         vm.expectRevert(EscrowERC20Delayed.OnlyDeployer.selector);
-        escrow.cancelAndWithdraw();
+        escrow.resume();
+
+        vm.prank(deployer);
+        escrow.resume();
+        assertFalse(escrow.cancellationRequest());
     }
 
-    function testCancelAndWithdrawRevertsIfNotFunded() public {
-        // First drain
+    function testCollectRejectsUnfundedEscrow() public {
+        vm.prank(executor);
+        vm.expectRevert(EscrowERC20Delayed.NotFunded.selector);
+        escrow.collect(_dummyProof(), block.number);
+    }
+
+    function testCollectRequiresBondedExecutor() public {
+        _fundAndBond();
+        vm.roll(block.number + 1);
+
+        vm.prank(other);
+        vm.expectRevert(EscrowERC20Delayed.OnlyBondedExecutor.selector);
+        escrow.collect(_dummyProof(), block.number);
+    }
+
+    function testCollectRejectsProofFromBeforeBond() public {
+        vm.roll(100);
+        _fundAndBond();
+        vm.roll(101);
+
+        vm.prank(executor);
+        vm.expectRevert(EscrowERC20Delayed.ProofBeforeBond.selector);
+        escrow.collect(_dummyProof(), 100);
+    }
+
+    function testCancelAndWithdrawRetiresEscrow() public {
+        uint256 partialFunding = FUND_REQUIRED / 2;
+        vm.prank(deployer);
+        token.transfer(address(escrow), partialFunding);
+        uint256 deployerBefore = token.balanceOf(deployer);
+
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        assertEq(token.balanceOf(deployer), deployerBefore + partialFunding);
+        assertEq(token.balanceOf(address(escrow)), 0);
+        assertEq(escrow.funded(), 0);
+        assertEq(escrow.currentPaymentAmount(), 0);
+        assertEq(escrow.currentRewardAmount(), 0);
+        assertEq(escrow.executionPotAmount(), 0);
+    }
+
+    function testRetiredEscrowCannotBeReused() public {
         vm.prank(deployer);
         token.transfer(address(escrow), 1);
         vm.prank(deployer);
         escrow.cancelAndWithdraw();
-        // Now stored state is 0; cancelAndWithdraw reverts NotFunded.
+
         vm.prank(deployer);
+        token.transfer(address(escrow), FUND_REQUIRED);
+        assertEq(escrow.funded(), 0);
+
+        vm.prank(executor);
         vm.expectRevert(EscrowERC20Delayed.NotFunded.selector);
-        escrow.cancelAndWithdraw();
+        escrow.bond(_sig(address(escrow), executor));
     }
 
-    function testCancelAndWithdrawRevertsIfEmpty() public {
-        // Stored state is 1 but balance is 0 -> NoWithdrawableFunds.
+    function testCancelAndWithdrawRejectsUnauthorizedOrEmpty() public {
+        vm.prank(executor);
+        vm.expectRevert(EscrowERC20Delayed.OnlyDeployer.selector);
+        escrow.cancelAndWithdraw();
+
         vm.prank(deployer);
         vm.expectRevert(EscrowERC20Delayed.NoWithdrawableFunds.selector);
         escrow.cancelAndWithdraw();
     }
 
-    function testCancelAndWithdrawRevertsWhileBondActive() public {
+    function testCancelAndWithdrawRejectsActiveBond() public {
         _fundAndBond();
 
         vm.prank(deployer);
@@ -279,104 +277,15 @@ contract EscrowERC20DelayedTest is Test {
         escrow.cancelAndWithdraw();
     }
 
-    function testReinitAfterCancel() public {
-        // Arm -> partially fund -> cancel (drains) -> reinit -> new args active.
-        vm.prank(deployer);
-        token.transfer(address(escrow), 1);
-        vm.prank(deployer);
-        escrow.cancelAndWithdraw();
-        assertEq(escrow.funded(), 0);
-
-        address newRecipient = makeAddr("newRecipient");
-        vm.prank(deployer);
-        escrow.reinit(newRecipient, EXPECTED_AMOUNT * 2, REWARD_AMOUNT * 2);
-
-        assertEq(escrow.expectedRecipient(), newRecipient);
-        assertEq(escrow.expectedAmount(), EXPECTED_AMOUNT * 2);
-        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT * 2);
-        assertEq(escrow.originalRewardAmount(), REWARD_AMOUNT * 2);
-        assertEq(escrow.funded(), 0); // stored state 1, no balance
-    }
-
-    function testReinitFromUnfundedDelayedState() public {
-        // State 1 with insufficient balance is now permitted: the deployer
-        // re-arms a slot that the previous user abandoned without funding.
-        address newRecipient = makeAddr("newRecipient");
-        vm.prank(deployer);
-        escrow.reinit(newRecipient, EXPECTED_AMOUNT * 2, REWARD_AMOUNT * 2);
-
-        assertEq(escrow.expectedRecipient(), newRecipient);
-        assertEq(escrow.expectedAmount(), EXPECTED_AMOUNT * 2);
-        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT * 2);
-    }
-
-    function testReinitRevertsWhenFullyFunded() public {
-        // State 2 (fully funded, ready to bond) blocks reinit — the deployer
-        // must let it close out via collect or cancelAndWithdraw first.
-        vm.prank(deployer);
-        token.transfer(address(escrow), FUND_REQUIRED);
-        // Cause stored state to flip to 2 by triggering an upgrade (bond
-        // performs the upgrade inline; here we force it via the same path).
-        vm.startPrank(executor);
-        token.approve(address(escrow), BOND_AMOUNT);
-        escrow.bond(BOND_AMOUNT);
-        vm.stopPrank();
-
-        // Bond is active so we'd hit BondActive first; warp past the deadline
-        // so the next reinit attempt sees state == 2 with no live bond.
+    function testCancelAndWithdrawAfterExpiredBond() public {
+        _fundAndBond();
         vm.warp(block.timestamp + 6 minutes);
+        uint256 deployerBefore = token.balanceOf(deployer);
 
-        vm.prank(deployer);
-        vm.expectRevert(EscrowERC20Delayed.AlreadyArmed.selector);
-        escrow.reinit(recipient, EXPECTED_AMOUNT, REWARD_AMOUNT);
-    }
-
-    function testReinitOnlyDeployer() public {
-        // First tear down to state 0.
-        vm.prank(deployer);
-        token.transfer(address(escrow), 1);
         vm.prank(deployer);
         escrow.cancelAndWithdraw();
 
-        vm.prank(executor);
-        vm.expectRevert(EscrowERC20Delayed.OnlyDeployer.selector);
-        escrow.reinit(recipient, EXPECTED_AMOUNT, REWARD_AMOUNT);
-    }
-
-    function testReinitRetainsPartialBalance() public {
-        // Tear down to state 0 without draining (impossible with cancelAndWithdraw,
-        // which always sweeps). Instead simulate the collect path: fund+bond and
-        // let the deadline expire, then the escrow sits with the original balance
-        // plus bond, fundedState stays 2. To land in state 0 with a balance,
-        // exercise the full happy collect path (out of scope for this unit) OR
-        // demonstrate the intent via direct storage manipulation.
-        //
-        // For now we verify the documented behavior: reinit does NOT touch
-        // balanceOf. Balance persists into the new signal's funded view.
-        vm.prank(deployer);
-        token.transfer(address(escrow), 1);
-        vm.prank(deployer);
-        escrow.cancelAndWithdraw();
-
-        // Balance is now 0 (cancelAndWithdraw swept). Seed a new balance from
-        // someone else to simulate "leftover tokens at this address."
-        vm.prank(other);
-        token.transfer(address(escrow), FUND_REQUIRED);
-
-        // Reinit with args whose required == leftover. Funded view should flip
-        // to 2 without any further transfer.
-        vm.prank(deployer);
-        escrow.reinit(recipient, EXPECTED_AMOUNT, REWARD_AMOUNT);
-        assertEq(escrow.funded(), 2, "leftover balance satisfies new arming");
-    }
-
-    function _fundAndBond() internal {
-        vm.prank(deployer);
-        token.transfer(address(escrow), FUND_REQUIRED);
-
-        vm.startPrank(executor);
-        token.approve(address(escrow), BOND_AMOUNT);
-        escrow.bond(BOND_AMOUNT);
-        vm.stopPrank();
+        assertEq(token.balanceOf(deployer), deployerBefore + EXPECTED_AMOUNT + REWARD_AMOUNT);
+        assertEq(escrow.funded(), 0);
     }
 }

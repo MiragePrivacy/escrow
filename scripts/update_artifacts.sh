@@ -34,5 +34,6 @@ extract() {
 
 echo "Updating bytecode artifacts:"
 extract EscrowERC20  erc20
+extract EscrowERC20Delayed delayed
 extract EscrowNative native
 extract EscrowBatch  batch

@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import {Test} from "forge-std/Test.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EscrowERC20} from "../src/EscrowERC20.sol";
+import {EscrowERC20Delayed} from "../src/EscrowERC20Delayed.sol";
 import {EscrowBatch} from "../src/EscrowBatch.sol";
 
 /// @dev Models mainnet USDT's transfer API: successful calls return no data.
@@ -105,6 +106,26 @@ contract USDTCompatibilityTest is Test {
             address(falseReturnToken), recipient, PAYMENT_AMOUNT, blindedSigner, REWARD_AMOUNT
         );
         vm.stopPrank();
+    }
+
+    function testDelayedWithdrawalAcceptsNoReturnData() public {
+        uint256 executionPot = 5e6;
+        uint256 escrowAmount = PAYMENT_AMOUNT + REWARD_AMOUNT + executionPot;
+
+        vm.prank(deployer);
+        EscrowERC20Delayed escrow = new EscrowERC20Delayed(
+            address(token), recipient, PAYMENT_AMOUNT, blindedSigner, REWARD_AMOUNT, executionPot
+        );
+        vm.prank(deployer);
+        token.transfer(address(escrow), escrowAmount);
+
+        assertEq(escrow.funded(), 2);
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        assertEq(escrow.funded(), 0);
+        assertEq(token.balanceOf(address(escrow)), 0);
+        assertEq(token.balanceOf(deployer), 1_000e6);
     }
 
     function testBatchFundingBidAndWithdrawalAcceptNoReturnData() public {
