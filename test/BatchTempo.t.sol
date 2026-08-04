@@ -3,6 +3,7 @@ pragma solidity ^0.8.30;
 
 import {Test} from "forge-std/Test.sol";
 import {EscrowBatch} from "../src/EscrowBatch.sol";
+import {BatchBondAuth} from "./helpers/BatchBondAuth.sol";
 
 interface IPathUSD {
     function transferFrom(address from, address to, uint256 value) external returns (bool);
@@ -48,7 +49,7 @@ contract BatchTempoTest is Test {
     bytes constant RECEIPT_PATH = hex"11";
 
     uint256 constant REWARD_AMOUNT = 1_000_000; // 1 PathUSD (6 decimals)
-    uint256 constant BOND_AMOUNT = 500_000; // 50% of reward; meets minimum
+    uint256 constant BLINDED_SIGNER_KEY = 42_429;
 
     function setUp() public {
         vm.chainId(42429);
@@ -62,34 +63,39 @@ contract BatchTempoTest is Test {
         vm.mockCall(TOKEN, abi.encodeWithSelector(IPathUSD.transfer.selector), abi.encode(true));
 
         EscrowBatch.BatchTransfer[] memory transfers = new EscrowBatch.BatchTransfer[](3);
-        transfers[0] = EscrowBatch.BatchTransfer({asset: TOKEN, recipient: RECIPIENT_A, amount: AMOUNT_A});
-        transfers[1] = EscrowBatch.BatchTransfer({asset: TOKEN, recipient: RECIPIENT_B, amount: AMOUNT_B});
-        transfers[2] = EscrowBatch.BatchTransfer({asset: TOKEN, recipient: RECIPIENT_C, amount: AMOUNT_C});
+        transfers[0] =
+            EscrowBatch.BatchTransfer({asset: TOKEN, recipient: RECIPIENT_A, amount: AMOUNT_A, valueWeight: AMOUNT_A});
+        transfers[1] =
+            EscrowBatch.BatchTransfer({asset: TOKEN, recipient: RECIPIENT_B, amount: AMOUNT_B, valueWeight: AMOUNT_B});
+        transfers[2] =
+            EscrowBatch.BatchTransfer({asset: TOKEN, recipient: RECIPIENT_C, amount: AMOUNT_C, valueWeight: AMOUNT_C});
 
+        address[] memory signers = new address[](1);
+        signers[0] = vm.addr(BLINDED_SIGNER_KEY);
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, REWARD_AMOUNT);
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, REWARD_AMOUNT, signers);
 
         uint256[] memory bidIndexes = new uint256[](3);
         bidIndexes[0] = 0;
         bidIndexes[1] = 1;
         bidIndexes[2] = 2;
 
+        bytes memory bidSignature = BatchBondAuth.sign(vm, BLINDED_SIGNER_KEY, address(escrow), BIDDER, bidIndexes);
         vm.prank(BIDDER);
-        escrow.bid(bidIndexes, BOND_AMOUNT);
+        escrow.bid(bidIndexes, bidSignature);
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, keccak256(BLOCK_HEADER));
 
-        // Proof: log 0/1/2 in the receipt map to expectedTransfer indexes 2/0/1 respectively
-        uint256[] memory transferIndexes = new uint256[](3);
+        // First collect only logs 0 and 1. Row 1 remains reserved under the
+        // original bid and deadline.
+        uint256[] memory transferIndexes = new uint256[](2);
         transferIndexes[0] = 2;
         transferIndexes[1] = 0;
-        transferIndexes[2] = 1;
 
-        uint256[] memory logIndexes = new uint256[](3);
+        uint256[] memory logIndexes = new uint256[](2);
         logIndexes[0] = 0;
         logIndexes[1] = 1;
-        logIndexes[2] = 2;
 
         EscrowBatch.BatchProof[] memory proofs = new EscrowBatch.BatchProof[](1);
         proofs[0] = EscrowBatch.BatchProof({
@@ -106,21 +112,39 @@ contract BatchTempoTest is Test {
             logIndexes: logIndexes
         });
 
-        vm.expectCall(
-            TOKEN,
-            abi.encodeWithSelector(
-                IPathUSD.transfer.selector, BIDDER, AMOUNT_A + AMOUNT_B + AMOUNT_C + REWARD_AMOUNT + BOND_AMOUNT
-            ),
-            1
-        );
+        vm.expectCall(TOKEN, abi.encodeWithSelector(IPathUSD.transfer.selector, BIDDER, 1_066_666), 1);
         vm.prank(BIDDER);
         escrow.collect(proofs);
 
-        // Full batch settled.
+        assertTrue(escrow.funded());
+        assertEq(escrow.currentTransferAmount(), AMOUNT_B);
+        assertEq(escrow.currentValueWeight(), AMOUNT_B);
+        assertEq(escrow.currentRewardAmount(), 333_334);
+        assertEq(escrow.completedTransferCount(), 2);
+        assertEq(escrow.claimable(BIDDER, TOKEN), 0);
+        assertEq(escrow.transferBidder(1), BIDDER);
+
+        (uint256 remainingRows,,) = escrow.bids(BIDDER);
+        assertEq(remainingRows, 1);
+
+        // The remaining log settles the final row in a later collect call.
+        transferIndexes = new uint256[](1);
+        transferIndexes[0] = 1;
+        logIndexes = new uint256[](1);
+        logIndexes[0] = 2;
+        proofs[0].transferIndexes = transferIndexes;
+        proofs[0].logIndexes = logIndexes;
+
+        vm.expectCall(TOKEN, abi.encodeWithSelector(IPathUSD.transfer.selector, BIDDER, 533_334), 1);
+        vm.prank(BIDDER);
+        escrow.collect(proofs);
+
         assertFalse(escrow.funded());
         assertEq(escrow.currentTransferAmount(), 0);
+        assertEq(escrow.currentValueWeight(), 0);
         assertEq(escrow.currentRewardAmount(), 0);
         assertEq(escrow.activeBidCount(), 0);
         assertEq(escrow.completedTransferCount(), 3);
+        assertEq(escrow.claimable(BIDDER, TOKEN), 0);
     }
 }
