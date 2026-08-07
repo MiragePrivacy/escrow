@@ -20,7 +20,6 @@ abstract contract EscrowBase {
     error CancellationRequested();
     error ExecutorAlreadyBonded();
     error InvalidBondSignature();
-    error BondTransferFailed();
     error ZeroBlindedSigner();
     error ProofBeforeBond();
 
@@ -39,7 +38,7 @@ abstract contract EscrowBase {
     bytes32 private immutable _domainSeparator;
 
     // The following variables are set up in the constructor.
-    address immutable deployerAddress;
+    address public immutable deployerAddress;
     uint256 public currentRewardAmount;
     uint256 public currentPaymentAmount;
     uint256 public originalRewardAmount;
@@ -59,10 +58,6 @@ abstract contract EscrowBase {
     address public bondedExecutor;
     uint256 public executionDeadline;
     uint256 public bondStartBlock;
-    // ETH bond pot. Sourced at fund time; paid out to the fresh EOA at bond() to bootstrap
-    // its gas. A one-shot faucet: once spent it does not refill, so a retry after a failed
-    // serve must use an already-funded EOA.
-    uint256 public bondPot;
     bool public cancellationRequest;
     bool public funded; // marks if the contract has funds to pay out the executors (if unfunded, no executor is accepted)
 
@@ -146,7 +141,7 @@ abstract contract EscrowBase {
 
     // Internal helper to validate bond requirements. The entry check is the ECDH gate:
     // the enclave's BondAuth signature must recover to this escrow's blindedSigner. There
-    // is no node deposit; the escrow pays out its bond pot instead of receiving one.
+    // is no node deposit; Nomad provisions executor gas outside the escrow.
     function _validateBond(bytes calldata bondSig) internal view {
         if (!funded) revert NotFunded();
         if (cancellationRequest) revert CancellationRequested();
@@ -162,10 +157,9 @@ abstract contract EscrowBase {
         bondStartBlock = block.number;
     }
 
-    // Locks the escrow to the calling fresh EOA and pays it the ETH bond pot to bootstrap
-    // its gas. Gated by the ECDH signature: bondSig must recover to blindedSigner. The bond
-    // ETH leaving the escrow lets the caller repay the block builder in the same bundle.
-    // Asset-agnostic (the pot is always ETH), so it lives in the base for both flavors.
+    // Locks the escrow to the calling EOA for five minutes. Gated by the ECDH signature:
+    // bondSig must recover to blindedSigner. Gas provisioning happens through Nomad's
+    // inventory and builder flow, so the sender does not deposit an execution-gas pot.
     function bond(bytes calldata bondSig) external {
         // A prior expired bond frees the lock for this fresh enclave.
         _clearExpiredBond();
@@ -173,11 +167,6 @@ abstract contract EscrowBase {
         _validateBond(bondSig);
 
         _setBondData();
-
-        uint256 pot = bondPot;
-        bondPot = 0;
-        (bool success,) = msg.sender.call{value: pot}("");
-        if (!success) revert BondTransferFailed();
     }
 
     // Internal helper to clear payout state
@@ -190,8 +179,7 @@ abstract contract EscrowBase {
         currentRewardAmount = 0;
     }
 
-    // Internal helper to calculate payout amount. The bond pot is spent bootstrapping the
-    // serve at bond() and is not part of the collect payout.
+    // Internal helper to calculate the principal reimbursement and reward payout.
     function _calculatePayout() internal view returns (uint256) {
         return currentRewardAmount + currentPaymentAmount;
     }

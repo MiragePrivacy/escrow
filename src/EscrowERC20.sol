@@ -12,7 +12,6 @@ contract EscrowERC20 is EscrowBase {
     error ZeroAddress();
     error AlreadyFunded();
     error ZeroRewardAmount();
-    error ZeroBondAmount();
     error InvalidReceiptProof();
     error InvalidTransferEvent();
     error NoWithdrawableFunds();
@@ -34,7 +33,7 @@ contract EscrowERC20 is EscrowBase {
         uint256 _expectedAmount,
         address _blindedSigner,
         uint256 _currentRewardAmount
-    ) payable EscrowBase(_expectedRecipient, _expectedAmount, _blindedSigner) {
+    ) EscrowBase(_expectedRecipient, _expectedAmount, _blindedSigner) {
         if (_tokenContract == address(0)) revert ZeroAddress();
         tokenContract = _tokenContract;
 
@@ -43,19 +42,16 @@ contract EscrowERC20 is EscrowBase {
         }
     }
 
-    // takes currentRewardAmount + expectedAmount (the payment) from the deployer's balance
-    // from the tokenContract, and the ETH bond pot (msg.value) that bootstraps the fresh
-    // EOA's gas. The payment reimburses the proven delivery, so it is always expectedAmount.
-    function fund(uint256 _currentRewardAmount) public payable {
+    // Takes currentRewardAmount + expectedAmount from the deployer's token balance. The
+    // sender deposits no ETH execution-gas surcharge; Nomad provisions executor gas.
+    function fund(uint256 _currentRewardAmount) public {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (funded) revert AlreadyFunded();
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
-        if (msg.value == 0) revert ZeroBondAmount();
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
         currentPaymentAmount = expectedAmount;
-        bondPot = msg.value;
         IERC20(tokenContract).safeTransferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount);
         funded = true;
     }
@@ -99,18 +95,10 @@ contract EscrowERC20 is EscrowBase {
         _tryResetBondData();
 
         uint256 withdrawableAmount = _calculateWithdrawableAmount();
-        uint256 pot = bondPot;
-
         _clearWithdrawState();
-        bondPot = 0;
 
         if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 
         IERC20(tokenContract).safeTransfer(msg.sender, withdrawableAmount);
-        // Return the unspent ETH bond pot alongside the token reward.
-        if (pot > 0) {
-            (bool success,) = msg.sender.call{value: pot}("");
-            if (!success) revert BondTransferFailed();
-        }
     }
 }

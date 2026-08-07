@@ -8,7 +8,6 @@ contract EscrowNative is EscrowBase {
     error IncorrectETHAmount();
     error AlreadyFunded();
     error ZeroRewardAmount();
-    error ZeroBondAmount();
     error InvalidTxProof();
     error InvalidReceiptProof();
     error TxFailed();
@@ -30,33 +29,28 @@ contract EscrowNative is EscrowBase {
         address _expectedRecipient,
         uint256 _expectedAmount,
         address _blindedSigner,
-        uint256 _currentRewardAmount,
-        uint256 _bondAmount
+        uint256 _currentRewardAmount
     ) payable EscrowBase(_expectedRecipient, _expectedAmount, _blindedSigner) {
         // The payment reimburses the proven delivery, so it is always the escrow's
         // expectedAmount; it is not an independent deploy parameter.
         if (_currentRewardAmount > 0) {
-            if (_bondAmount == 0) revert ZeroBondAmount();
-            if (msg.value != _currentRewardAmount + _expectedAmount + _bondAmount) revert IncorrectETHAmount();
+            if (msg.value != _currentRewardAmount + _expectedAmount) revert IncorrectETHAmount();
             currentRewardAmount = _currentRewardAmount;
             originalRewardAmount = _currentRewardAmount;
             currentPaymentAmount = _expectedAmount;
-            bondPot = _bondAmount;
             funded = true;
         }
     }
 
-    function fund(uint256 _currentRewardAmount, uint256 _bondAmount) external payable {
+    function fund(uint256 _currentRewardAmount) external payable {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (funded) revert AlreadyFunded();
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
-        if (_bondAmount == 0) revert ZeroBondAmount();
-        if (msg.value != _currentRewardAmount + expectedAmount + _bondAmount) revert IncorrectETHAmount();
+        if (msg.value != _currentRewardAmount + expectedAmount) revert IncorrectETHAmount();
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
         currentPaymentAmount = expectedAmount;
-        bondPot = _bondAmount;
         funded = true;
     }
 
@@ -107,11 +101,9 @@ contract EscrowNative is EscrowBase {
         _validateWithdraw();
         _tryResetBondData();
 
-        // The unspent bond pot is returned together with the reward/payment.
-        uint256 withdrawableAmount = _calculateWithdrawableAmount() + bondPot;
+        uint256 withdrawableAmount = _calculateWithdrawableAmount();
 
         _clearWithdrawState();
-        bondPot = 0;
 
         if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 
