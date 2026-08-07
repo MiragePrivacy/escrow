@@ -96,6 +96,7 @@ contract EscrowBatch {
     error TransferStateConflict();
     error Reentrancy();
     error GasAdvanceTooLarge();
+    error GasAdvanceBudgetExceedsReward();
 
     // ============ Storage ============
 
@@ -111,6 +112,8 @@ contract EscrowBatch {
     address public immutable rewardAsset;
     uint256 public immutable totalTransferAmount;
     uint256 public immutable totalValueWeight;
+    /// @notice Quote-time reward budget reserved for fresh-EOA gas provisioning.
+    uint256 public immutable maxGasAdvance;
 
     uint256 public currentRewardAmount;
     uint256 public currentTransferAmount;
@@ -124,8 +127,6 @@ contract EscrowBatch {
     uint256 public constant BID_DURATION = 5 minutes;
     uint256 public constant MAX_ROWS = 256;
     uint256 public constant MAX_BLINDED_SIGNERS = 256;
-    uint256 public constant MAX_GAS_ADVANCE_BPS = 5_000;
-    uint256 private constant BPS_DENOMINATOR = 10_000;
     uint256 private constant NOT_ENTERED = 1;
     uint256 private constant ENTERED = 2;
 
@@ -171,6 +172,7 @@ contract EscrowBatch {
         address _rewardAsset,
         BatchTransfer[] memory _expectedTransfers,
         uint256 _currentRewardAmount,
+        uint256 _maxGasAdvance,
         address[] memory _blindedSigners
     ) payable {
         if (_expectedTransfers.length == 0) revert EmptyBatch();
@@ -179,6 +181,7 @@ contract EscrowBatch {
         if (_blindedSigners.length > MAX_BLINDED_SIGNERS) revert TooManyBlindedSigners();
 
         rewardAsset = _rewardAsset;
+        maxGasAdvance = _maxGasAdvance;
         deployerAddress = msg.sender;
         _domainSeparator =
             keccak256(abi.encode(_DOMAIN_TYPEHASH, _NAME_HASH, _VERSION_HASH, block.chainid, address(this)));
@@ -260,10 +263,9 @@ contract EscrowBatch {
     /// @notice Reward funds still available to bootstrap future bidders.
     /// The limit applies across the entire escrow, not independently per bid.
     function remainingGasAdvance() public view returns (uint256) {
-        uint256 maximumTotalAdvance = Math.mulDiv(originalRewardAmount, MAX_GAS_ADVANCE_BPS, BPS_DENOMINATOR);
-        if (totalGasAdvanced >= maximumTotalAdvance) return 0;
+        if (totalGasAdvanced >= maxGasAdvance) return 0;
 
-        uint256 allowance = maximumTotalAdvance - totalGasAdvanced;
+        uint256 allowance = maxGasAdvance - totalGasAdvanced;
         return Math.min(allowance, currentRewardAmount);
     }
 
@@ -506,6 +508,7 @@ contract EscrowBatch {
 
     function _fund(uint256 _currentRewardAmount) internal {
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
+        if (maxGasAdvance > _currentRewardAmount) revert GasAdvanceBudgetExceedsReward();
 
         // msg.value must cover any native transfers in the batch plus, if the
         // reward currency is ETH, the reward amount itself.

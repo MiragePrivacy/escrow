@@ -29,11 +29,13 @@ contract EscrowNative is EscrowBase {
         address _expectedRecipient,
         uint256 _expectedAmount,
         address _blindedSigner,
-        uint256 _currentRewardAmount
-    ) payable EscrowBase(_expectedRecipient, _expectedAmount, _blindedSigner) {
+        uint256 _currentRewardAmount,
+        uint256 _maxGasAdvance
+    ) payable EscrowBase(_expectedRecipient, _expectedAmount, _blindedSigner, _maxGasAdvance) {
         // The payment reimburses the proven delivery, so it is always the escrow's
         // expectedAmount; it is not an independent deploy parameter.
         if (_currentRewardAmount > 0) {
+            _validateGasAdvanceBudget(_currentRewardAmount);
             if (msg.value != _currentRewardAmount + _expectedAmount) revert IncorrectETHAmount();
             currentRewardAmount = _currentRewardAmount;
             originalRewardAmount = _currentRewardAmount;
@@ -46,6 +48,7 @@ contract EscrowNative is EscrowBase {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (funded) revert AlreadyFunded();
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
+        _validateGasAdvanceBudget(_currentRewardAmount);
         if (msg.value != _currentRewardAmount + expectedAmount) revert IncorrectETHAmount();
 
         currentRewardAmount = _currentRewardAmount;

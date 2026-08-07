@@ -5,7 +5,6 @@ import "./BlockHeaderParser.sol";
 import "./MPTVerifier.sol";
 import "./ReceiptValidator.sol";
 import "./utils/ECDSA.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 abstract contract EscrowBase {
     // Custom errors
@@ -25,6 +24,7 @@ abstract contract EscrowBase {
     error ProofBeforeBond();
     error GasAdvanceAlreadyClaimed();
     error GasAdvanceTooLarge();
+    error GasAdvanceBudgetExceedsReward();
     error GasAdvanceTransferFailed();
 
     // EIP-712 typed-data constants. The domain MUST match the off-chain signer
@@ -37,11 +37,6 @@ abstract contract EscrowBase {
     bytes32 private constant _BOND_TYPEHASH = keccak256("BondAuth(address bondingExecutor,uint256 gasAdvance)");
     bytes32 private constant _NAME_HASH = keccak256("MirageEscrow");
     bytes32 private constant _VERSION_HASH = keccak256("1");
-    uint256 private constant _BPS_DENOMINATOR = 10_000;
-
-    /// @notice Maximum share of the original reward that can bootstrap a fresh EOA.
-    uint256 public constant MAX_GAS_ADVANCE_BPS = 5_000;
-
     // Cached EIP-712 domain separator, bound to this contract + chain at deploy.
     bytes32 private immutable _domainSeparator;
 
@@ -50,6 +45,8 @@ abstract contract EscrowBase {
     uint256 public currentRewardAmount;
     uint256 public currentPaymentAmount;
     uint256 public originalRewardAmount;
+    /// @notice Quote-time reward budget reserved for fresh-EOA gas provisioning.
+    uint256 public immutable maxGasAdvance;
 
     // Blinded enclave key P = G + s.B, stored as address(P). The enclave signs a BondAuth
     // with the matching scalar p = g + s; ecrecover of a valid signature yields this address.
@@ -71,13 +68,14 @@ abstract contract EscrowBase {
     bool public cancellationRequest;
     bool public funded; // marks if the contract has funds to pay out the executors (if unfunded, no executor is accepted)
 
-    constructor(address _expectedRecipient, uint256 _expectedAmount, address _blindedSigner) {
+    constructor(address _expectedRecipient, uint256 _expectedAmount, address _blindedSigner, uint256 _maxGasAdvance) {
         // Zero can't arise from a correct P = G + s.B derivation, so it signals an
         // upstream derivation/encoding bug; reject it like a zero token address.
         if (_blindedSigner == address(0)) revert ZeroBlindedSigner();
         expectedRecipient = _expectedRecipient;
         expectedAmount = _expectedAmount;
         blindedSigner = _blindedSigner;
+        maxGasAdvance = _maxGasAdvance;
         deployerAddress = msg.sender;
         _domainSeparator =
             keccak256(abi.encode(_DOMAIN_TYPEHASH, _NAME_HASH, _VERSION_HASH, block.chainid, address(this)));
@@ -176,7 +174,11 @@ abstract contract EscrowBase {
     /// @notice Remaining one-time advance available from the existing reward.
     function remainingGasAdvance() public view returns (uint256) {
         if (gasAdvanceClaimed) return 0;
-        return Math.mulDiv(originalRewardAmount, MAX_GAS_ADVANCE_BPS, _BPS_DENOMINATOR);
+        return maxGasAdvance < currentRewardAmount ? maxGasAdvance : currentRewardAmount;
+    }
+
+    function _validateGasAdvanceBudget(uint256 rewardAmount) internal view {
+        if (maxGasAdvance > rewardAmount) revert GasAdvanceBudgetExceedsReward();
     }
 
     // Locks the escrow to the calling EOA for five minutes and optionally releases

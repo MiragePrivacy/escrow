@@ -32,8 +32,9 @@ contract EscrowERC20 is EscrowBase {
         address _expectedRecipient,
         uint256 _expectedAmount,
         address _blindedSigner,
-        uint256 _currentRewardAmount
-    ) EscrowBase(_expectedRecipient, _expectedAmount, _blindedSigner) {
+        uint256 _currentRewardAmount,
+        uint256 _maxGasAdvance
+    ) EscrowBase(_expectedRecipient, _expectedAmount, _blindedSigner, _maxGasAdvance) {
         if (_tokenContract == address(0)) revert ZeroAddress();
         tokenContract = _tokenContract;
 
@@ -48,6 +49,7 @@ contract EscrowERC20 is EscrowBase {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (funded) revert AlreadyFunded();
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
+        _validateGasAdvanceBudget(_currentRewardAmount);
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
