@@ -12,7 +12,6 @@ contract EscrowERC20 is EscrowBase {
     error ZeroAddress();
     error AlreadyFunded();
     error ZeroRewardAmount();
-    error ZeroBondAmount();
     error InvalidReceiptProof();
     error InvalidTransferEvent();
     error NoWithdrawableFunds();
@@ -33,8 +32,9 @@ contract EscrowERC20 is EscrowBase {
         address _expectedRecipient,
         uint256 _expectedAmount,
         address _blindedSigner,
-        uint256 _currentRewardAmount
-    ) payable EscrowBase(_expectedRecipient, _expectedAmount, _blindedSigner) {
+        uint256 _currentRewardAmount,
+        uint256 _maxGasAdvance
+    ) EscrowBase(_expectedRecipient, _expectedAmount, _blindedSigner, _maxGasAdvance) {
         if (_tokenContract == address(0)) revert ZeroAddress();
         tokenContract = _tokenContract;
 
@@ -43,21 +43,24 @@ contract EscrowERC20 is EscrowBase {
         }
     }
 
-    // takes currentRewardAmount + expectedAmount (the payment) from the deployer's balance
-    // from the tokenContract, and the ETH bond pot (msg.value) that bootstraps the fresh
-    // EOA's gas. The payment reimburses the proven delivery, so it is always expectedAmount.
-    function fund(uint256 _currentRewardAmount) public payable {
+    // Takes currentRewardAmount + expectedAmount from the deployer's token balance. The
+    // sender deposits no ETH execution-gas surcharge; Nomad provisions executor gas.
+    function fund(uint256 _currentRewardAmount) public {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (funded) revert AlreadyFunded();
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
-        if (msg.value == 0) revert ZeroBondAmount();
+        _validateGasAdvanceBudget(_currentRewardAmount);
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
         currentPaymentAmount = expectedAmount;
-        bondPot = msg.value;
+        gasAdvanceClaimed = false;
         IERC20(tokenContract).safeTransferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount);
         funded = true;
+    }
+
+    function _releaseGasAdvance(address executor, uint256 gasAdvance) internal override {
+        IERC20(tokenContract).safeTransfer(executor, gasAdvance);
     }
 
     // Validates a Transfer-event proof against a recent block hash and checks the Transfer
@@ -99,18 +102,10 @@ contract EscrowERC20 is EscrowBase {
         _tryResetBondData();
 
         uint256 withdrawableAmount = _calculateWithdrawableAmount();
-        uint256 pot = bondPot;
-
         _clearWithdrawState();
-        bondPot = 0;
 
         if (withdrawableAmount == 0) revert NoWithdrawableFunds();
 
         IERC20(tokenContract).safeTransfer(msg.sender, withdrawableAmount);
-        // Return the unspent ETH bond pot alongside the token reward.
-        if (pot > 0) {
-            (bool success,) = msg.sender.call{value: pot}("");
-            if (!success) revert BondTransferFailed();
-        }
     }
 }

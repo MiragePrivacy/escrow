@@ -66,8 +66,9 @@ contract EscrowBatchHarness is EscrowBatch {
         address rewardAsset,
         BatchTransfer[] memory expectedTransfers,
         uint256 currentRewardAmount,
+        uint256 maxGasAdvance,
         address[] memory blindedSigners
-    ) payable EscrowBatch(rewardAsset, expectedTransfers, currentRewardAmount, blindedSigners) {}
+    ) payable EscrowBatch(rewardAsset, expectedTransfers, currentRewardAmount, maxGasAdvance, blindedSigners) {}
 
     function settleRowsForTest(uint256[] calldata transferIndexes) external {
         uint256[] memory provedTransferIndexes = new uint256[](transferIndexes.length);
@@ -96,6 +97,7 @@ contract EscrowBatchTest is Test {
     uint256 constant AMOUNT_B = 250e18;
     uint256 constant PAYMENT_AMOUNT = AMOUNT_A + AMOUNT_B;
     uint256 constant REWARD_AMOUNT = 50e18;
+    uint256 constant GAS_ADVANCE_BUDGET = REWARD_AMOUNT / 2;
     uint256 constant BLINDED_SIGNER_KEY_BASE = 10_000;
     uint256 nextSignerIndex;
 
@@ -113,7 +115,7 @@ contract EscrowBatchTest is Test {
         address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow, PAYMENT_AMOUNT + REWARD_AMOUNT);
 
-        escrow = new EscrowBatch(address(token), _batch(), REWARD_AMOUNT, _blindedSigners(16));
+        escrow = new EscrowBatch(address(token), _batch(), REWARD_AMOUNT, GAS_ADVANCE_BUDGET, _blindedSigners(16));
         vm.stopPrank();
 
         token.mint(bidder, 10_000e18);
@@ -123,6 +125,7 @@ contract EscrowBatchTest is Test {
     function testConstructorStoresBatch() public view {
         assertEq(escrow.deployerAddress(), deployer);
         assertEq(escrow.rewardAsset(), address(token));
+        assertEq(escrow.maxGasAdvance(), GAS_ADVANCE_BUDGET);
         assertEq(escrow.blindedSignerCount(), 16);
         assertEq(escrow.expectedTransferCount(), 2);
         assertEq(escrow.totalTransferAmount(), PAYMENT_AMOUNT);
@@ -156,7 +159,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBatch.EmptyBatch.selector);
-        new EscrowBatch(address(token), transfers, REWARD_AMOUNT, _blindedSigners(1));
+        new EscrowBatch(address(token), transfers, REWARD_AMOUNT, GAS_ADVANCE_BUDGET, _blindedSigners(1));
     }
 
     function testConstructorRejectsZeroAmount() public {
@@ -166,7 +169,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBatch.ZeroPaymentAmount.selector);
-        new EscrowBatch(address(token), transfers, REWARD_AMOUNT, _blindedSigners(1));
+        new EscrowBatch(address(token), transfers, REWARD_AMOUNT, GAS_ADVANCE_BUDGET, _blindedSigners(1));
     }
 
     function testConstructorRejectsZeroValueWeight() public {
@@ -176,7 +179,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBatch.ZeroValueWeight.selector);
-        new EscrowBatch(address(token), transfers, REWARD_AMOUNT, _blindedSigners(1));
+        new EscrowBatch(address(token), transfers, REWARD_AMOUNT, GAS_ADVANCE_BUDGET, _blindedSigners(1));
     }
 
     function testConstructorRejectsEmptyBlindedSigners() public {
@@ -184,7 +187,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBatch.EmptyBlindedSigners.selector);
-        new EscrowBatch(address(token), _batch(), REWARD_AMOUNT, signers);
+        new EscrowBatch(address(token), _batch(), REWARD_AMOUNT, GAS_ADVANCE_BUDGET, signers);
     }
 
     function testConstructorRejectsZeroBlindedSigner() public {
@@ -192,7 +195,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBatch.ZeroBlindedSigner.selector);
-        new EscrowBatch(address(token), _batch(), REWARD_AMOUNT, signers);
+        new EscrowBatch(address(token), _batch(), REWARD_AMOUNT, GAS_ADVANCE_BUDGET, signers);
     }
 
     function testConstructorRejectsDuplicateBlindedSigner() public {
@@ -202,7 +205,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBatch.DuplicateBlindedSigner.selector);
-        new EscrowBatch(address(token), _batch(), REWARD_AMOUNT, signers);
+        new EscrowBatch(address(token), _batch(), REWARD_AMOUNT, GAS_ADVANCE_BUDGET, signers);
     }
 
     function testConstructorRejectsTooManyBlindedSigners() public {
@@ -210,7 +213,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBatch.TooManyBlindedSigners.selector);
-        new EscrowBatch(address(token), _batch(), REWARD_AMOUNT, signers);
+        new EscrowBatch(address(token), _batch(), REWARD_AMOUNT, GAS_ADVANCE_BUDGET, signers);
     }
 
     function testConstructorRejectsTooManyRows() public {
@@ -218,12 +221,21 @@ contract EscrowBatchTest is Test {
 
         vm.prank(deployer);
         vm.expectRevert(EscrowBatch.TooManyRows.selector);
-        new EscrowBatch(address(token), transfers, REWARD_AMOUNT, _blindedSigners(1));
+        new EscrowBatch(address(token), transfers, REWARD_AMOUNT, GAS_ADVANCE_BUDGET, _blindedSigners(1));
+    }
+
+    function testConstructorRejectsGasAdvanceBudgetAboveReward() public {
+        vm.startPrank(deployer);
+        address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
+        token.approve(futureEscrow, PAYMENT_AMOUNT + REWARD_AMOUNT);
+        vm.expectRevert(EscrowBatch.GasAdvanceBudgetExceedsReward.selector);
+        new EscrowBatch(address(token), _batch(), REWARD_AMOUNT, REWARD_AMOUNT + 1, _blindedSigners(2));
+        vm.stopPrank();
     }
 
     function testFundUnfundedBatch() public {
         vm.startPrank(deployer);
-        EscrowBatch unfunded = new EscrowBatch(address(token), _batch(), 0, _blindedSigners(2));
+        EscrowBatch unfunded = new EscrowBatch(address(token), _batch(), 0, GAS_ADVANCE_BUDGET, _blindedSigners(2));
 
         token.approve(address(unfunded), PAYMENT_AMOUNT + REWARD_AMOUNT);
         token.resetCallStats();
@@ -240,7 +252,7 @@ contract EscrowBatchTest is Test {
 
     function testFundOnlyDeployer() public {
         vm.prank(deployer);
-        EscrowBatch unfunded = new EscrowBatch(address(token), _batch(), 0, _blindedSigners(2));
+        EscrowBatch unfunded = new EscrowBatch(address(token), _batch(), 0, GAS_ADVANCE_BUDGET, _blindedSigners(2));
 
         vm.startPrank(bidder);
         token.approve(address(unfunded), PAYMENT_AMOUNT + REWARD_AMOUNT);
@@ -258,8 +270,9 @@ contract EscrowBatchTest is Test {
         vm.startPrank(deployer);
         vm.deal(deployer, 1 ether);
         token.approve(vm.computeCreateAddress(deployer, vm.getNonce(deployer)), REWARD_AMOUNT);
-        EscrowBatch nativeEscrow =
-            new EscrowBatch{value: 1 ether}(address(token), transfers, REWARD_AMOUNT, _blindedSigners(2));
+        EscrowBatch nativeEscrow = new EscrowBatch{value: 1 ether}(
+            address(token), transfers, REWARD_AMOUNT, GAS_ADVANCE_BUDGET, _blindedSigners(2)
+        );
         vm.stopPrank();
 
         assertTrue(nativeEscrow.funded());
@@ -289,6 +302,62 @@ contract EscrowBatchTest is Test {
         assertTrue(escrow.is_bonded());
     }
 
+    function testBidAdvancesRewardTokens() public {
+        uint256 gasAdvance = REWARD_AMOUNT / 4;
+        uint256[] memory indexes = _singleIndex(0);
+        bytes memory signature =
+            BatchBondAuth.sign(vm, BLINDED_SIGNER_KEY_BASE, address(escrow), bidder, indexes, gasAdvance);
+        uint256 bidderBefore = token.balanceOf(bidder);
+
+        vm.prank(bidder);
+        escrow.bid(indexes, gasAdvance, signature);
+
+        assertEq(token.balanceOf(bidder), bidderBefore + gasAdvance);
+        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT - gasAdvance);
+        assertEq(escrow.totalGasAdvanced(), gasAdvance);
+        assertEq(escrow.remainingGasAdvance(), REWARD_AMOUNT / 2 - gasAdvance);
+    }
+
+    function testBidSignatureBindsGasAdvance() public {
+        uint256[] memory indexes = _singleIndex(0);
+        uint256 signedAdvance = REWARD_AMOUNT / 4;
+        bytes memory signature =
+            BatchBondAuth.sign(vm, BLINDED_SIGNER_KEY_BASE, address(escrow), bidder, indexes, signedAdvance);
+
+        vm.prank(bidder);
+        vm.expectRevert(EscrowBatch.InvalidBidSignature.selector);
+        escrow.bid(indexes, signedAdvance + 1, signature);
+    }
+
+    function testBidAdvancesShareOneEscrowWideLimit() public {
+        uint256 firstAdvance = REWARD_AMOUNT * 2 / 5;
+        uint256 remainingAdvance = REWARD_AMOUNT / 10;
+        uint256[] memory firstIndexes = _singleIndex(0);
+        uint256[] memory secondIndexes = _singleIndex(1);
+
+        bytes memory firstSignature =
+            BatchBondAuth.sign(vm, BLINDED_SIGNER_KEY_BASE, address(escrow), bidder, firstIndexes, firstAdvance);
+        vm.prank(bidder);
+        escrow.bid(firstIndexes, firstAdvance, firstSignature);
+
+        bytes memory excessiveSignature = BatchBondAuth.sign(
+            vm, BLINDED_SIGNER_KEY_BASE + 1, address(escrow), other, secondIndexes, remainingAdvance + 1
+        );
+        vm.prank(other);
+        vm.expectRevert(EscrowBatch.GasAdvanceTooLarge.selector);
+        escrow.bid(secondIndexes, remainingAdvance + 1, excessiveSignature);
+
+        bytes memory remainingSignature = BatchBondAuth.sign(
+            vm, BLINDED_SIGNER_KEY_BASE + 1, address(escrow), other, secondIndexes, remainingAdvance
+        );
+        vm.prank(other);
+        escrow.bid(secondIndexes, remainingAdvance, remainingSignature);
+
+        assertEq(escrow.totalGasAdvanced(), REWARD_AMOUNT / 2);
+        assertEq(escrow.remainingGasAdvance(), 0);
+        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT / 2);
+    }
+
     function testIsBondedIgnoresExpiredBidBeforeCleanup() public {
         _placeBid(_singleIndex(0));
         vm.warp(block.timestamp + escrow.BID_DURATION() + 1);
@@ -312,7 +381,7 @@ contract EscrowBatchTest is Test {
         bytes memory signature = _nextBidSignature(address(escrow), other, indexes);
         vm.prank(other);
         vm.expectRevert(EscrowBatch.TransferStateConflict.selector);
-        escrow.bid(indexes, signature);
+        escrow.bid(indexes, 0, signature);
     }
 
     function testBidRejectsDuplicateTransferIndex() public {
@@ -323,7 +392,7 @@ contract EscrowBatchTest is Test {
         bytes memory signature = _nextBidSignature(address(escrow), bidder, duplicateIndexes);
         vm.prank(bidder);
         vm.expectRevert(EscrowBatch.DuplicateProofItem.selector);
-        escrow.bid(duplicateIndexes, signature);
+        escrow.bid(duplicateIndexes, 0, signature);
     }
 
     function testBidRejectsUnauthorizedSigner() public {
@@ -332,7 +401,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(bidder);
         vm.expectRevert(EscrowBatch.InvalidBidSignature.selector);
-        escrow.bid(indexes, signature);
+        escrow.bid(indexes, 0, signature);
     }
 
     function testBidSignatureCannotBeUsedByAnotherExecutor() public {
@@ -341,7 +410,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(other);
         vm.expectRevert(EscrowBatch.InvalidBidSignature.selector);
-        escrow.bid(indexes, signature);
+        escrow.bid(indexes, 0, signature);
     }
 
     function testBidSignatureCannotAuthorizeDifferentRows() public {
@@ -350,7 +419,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(bidder);
         vm.expectRevert(EscrowBatch.InvalidBidSignature.selector);
-        escrow.bid(_singleIndex(1), signature);
+        escrow.bid(_singleIndex(1), 0, signature);
     }
 
     function testBidSignatureCannotBeUsedForAnotherEscrow() public {
@@ -360,7 +429,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(bidder);
         vm.expectRevert(EscrowBatch.InvalidBidSignature.selector);
-        otherEscrow.bid(indexes, signature);
+        otherEscrow.bid(indexes, 0, signature);
     }
 
     function testDomainSeparatorBindsDeploymentChain() public view {
@@ -378,14 +447,14 @@ contract EscrowBatchTest is Test {
         bytes memory signature = BatchBondAuth.sign(vm, BLINDED_SIGNER_KEY_BASE, address(escrow), bidder, indexes);
 
         vm.prank(bidder);
-        escrow.bid(indexes, signature);
+        escrow.bid(indexes, 0, signature);
 
         vm.warp(block.timestamp + escrow.BID_DURATION() + 1);
         escrow.expireBid(bidder);
 
         vm.prank(bidder);
         vm.expectRevert(EscrowBatch.BlindedSignerAlreadyUsed.selector);
-        escrow.bid(indexes, signature);
+        escrow.bid(indexes, 0, signature);
 
         assertEq(escrow.activeBidCount(), 0);
         assertEq(escrow.transferBidder(0), address(0));
@@ -493,7 +562,7 @@ contract EscrowBatchTest is Test {
         bytes memory completedSignature = _nextBidSignature(address(partialEscrow), other, completedIndex);
         vm.expectRevert(EscrowBatch.TransferStateConflict.selector);
         vm.prank(other);
-        partialEscrow.bid(completedIndex, completedSignature);
+        partialEscrow.bid(completedIndex, 0, completedSignature);
 
         vm.warp(block.timestamp + partialEscrow.BID_DURATION() + 1);
         _placeBidAs(partialEscrow, other, _singleIndex(9));
@@ -643,8 +712,9 @@ contract EscrowBatchTest is Test {
         vm.deal(deployer, REWARD_AMOUNT);
         vm.startPrank(deployer);
         token.approve(vm.computeCreateAddress(deployer, vm.getNonce(deployer)), PAYMENT_AMOUNT);
-        EscrowBatch ethEscrow =
-            new EscrowBatch{value: REWARD_AMOUNT}(address(0), transfers, REWARD_AMOUNT, _blindedSigners(16));
+        EscrowBatch ethEscrow = new EscrowBatch{value: REWARD_AMOUNT}(
+            address(0), transfers, REWARD_AMOUNT, GAS_ADVANCE_BUDGET, _blindedSigners(16)
+        );
         vm.stopPrank();
 
         assertEq(ethEscrow.rewardAsset(), address(0));
@@ -660,13 +730,38 @@ contract EscrowBatchTest is Test {
         assertEq(address(ethEscrow).balance, REWARD_AMOUNT);
     }
 
+    function testNativeRewardEscrowAdvancesEth() public {
+        EscrowBatch.BatchTransfer[] memory transfers = _batch();
+        vm.deal(deployer, REWARD_AMOUNT);
+        vm.startPrank(deployer);
+        token.approve(vm.computeCreateAddress(deployer, vm.getNonce(deployer)), PAYMENT_AMOUNT);
+        EscrowBatch ethEscrow = new EscrowBatch{value: REWARD_AMOUNT}(
+            address(0), transfers, REWARD_AMOUNT, GAS_ADVANCE_BUDGET, _blindedSigners(16)
+        );
+        vm.stopPrank();
+
+        uint256 gasAdvance = REWARD_AMOUNT / 4;
+        uint256[] memory indexes = _fullIndexes();
+        bytes memory signature =
+            BatchBondAuth.sign(vm, BLINDED_SIGNER_KEY_BASE, address(ethEscrow), bidder, indexes, gasAdvance);
+        uint256 bidderBefore = bidder.balance;
+
+        vm.prank(bidder);
+        ethEscrow.bid(indexes, gasAdvance, signature);
+
+        assertEq(bidder.balance, bidderBefore + gasAdvance);
+        assertEq(address(ethEscrow).balance, REWARD_AMOUNT - gasAdvance);
+        assertEq(ethEscrow.currentRewardAmount(), REWARD_AMOUNT - gasAdvance);
+    }
+
     function testFreeBidDoesNotRequireNativeValue() public {
         EscrowBatch.BatchTransfer[] memory transfers = _batch();
         vm.deal(deployer, REWARD_AMOUNT);
         vm.startPrank(deployer);
         token.approve(vm.computeCreateAddress(deployer, vm.getNonce(deployer)), PAYMENT_AMOUNT);
-        EscrowBatch ethEscrow =
-            new EscrowBatch{value: REWARD_AMOUNT}(address(0), transfers, REWARD_AMOUNT, _blindedSigners(16));
+        EscrowBatch ethEscrow = new EscrowBatch{value: REWARD_AMOUNT}(
+            address(0), transfers, REWARD_AMOUNT, GAS_ADVANCE_BUDGET, _blindedSigners(16)
+        );
         vm.stopPrank();
 
         _placeBidAs(ethEscrow, bidder, _fullIndexes());
@@ -680,7 +775,7 @@ contract EscrowBatchTest is Test {
         vm.deal(bidder, 1 ether);
         vm.prank(bidder);
         (bool succeeded,) =
-            address(escrow).call{value: 1}(abi.encodeWithSelector(escrow.bid.selector, indexes, signature));
+            address(escrow).call{value: 1}(abi.encodeWithSelector(escrow.bid.selector, indexes, 0, signature));
 
         assertFalse(succeeded);
     }
@@ -690,8 +785,9 @@ contract EscrowBatchTest is Test {
         vm.deal(deployer, REWARD_AMOUNT);
         vm.startPrank(deployer);
         token.approve(vm.computeCreateAddress(deployer, vm.getNonce(deployer)), PAYMENT_AMOUNT);
-        EscrowBatch ethEscrow =
-            new EscrowBatch{value: REWARD_AMOUNT}(address(0), transfers, REWARD_AMOUNT, _blindedSigners(16));
+        EscrowBatch ethEscrow = new EscrowBatch{value: REWARD_AMOUNT}(
+            address(0), transfers, REWARD_AMOUNT, GAS_ADVANCE_BUDGET, _blindedSigners(16)
+        );
         vm.stopPrank();
 
         uint256 tokenBalanceBefore = token.balanceOf(deployer);
@@ -723,7 +819,7 @@ contract EscrowBatchTest is Test {
     function _placeBidAs(EscrowBatch target, address biddingExecutor, uint256[] memory transferIndexes) internal {
         bytes memory signature = _nextBidSignature(address(target), biddingExecutor, transferIndexes);
         vm.prank(biddingExecutor);
-        target.bid(transferIndexes, signature);
+        target.bid(transferIndexes, 0, signature);
     }
 
     function _nextBidSignature(address target, address biddingExecutor, uint256[] memory transferIndexes)
@@ -780,7 +876,8 @@ contract EscrowBatchTest is Test {
         vm.startPrank(deployer);
         address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow, principal + rewardAmount);
-        deployed = new EscrowBatchHarness(address(token), transfers, rewardAmount, _blindedSigners(16));
+        deployed =
+            new EscrowBatchHarness(address(token), transfers, rewardAmount, rewardAmount / 2, _blindedSigners(16));
         vm.stopPrank();
     }
 

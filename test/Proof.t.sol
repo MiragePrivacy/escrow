@@ -49,7 +49,6 @@ contract EscrowMPTTest is Test {
     uint256 constant TRANSFER_AMOUNT = 0x17d7840; // From: logs[0].data
     uint256 constant REWARD_AMOUNT = 500e18;
     uint256 constant PAYMENT_AMOUNT = TRANSFER_AMOUNT;
-    uint256 constant BOND_POT = 0.25 ether;
 
     uint256 constant TARGET_BLOCK_NUMBER = 9084468; // From: block_number
     bytes32 constant TARGET_BLOCK_HASH = 0x490a3fc0b0c2170b55ca18ce6c73fc1af50ebe0931b525a3510c048f2b428617; // From: block_hash
@@ -72,9 +71,8 @@ contract EscrowMPTTest is Test {
         // Mock the token transfers for constructor funding
         vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
 
-        EscrowERC20 proofEscrow = new EscrowERC20{value: BOND_POT}(
-            proofTokenAddress, proofRecipient, TRANSFER_AMOUNT, enclave.addr, REWARD_AMOUNT
-        );
+        EscrowERC20 proofEscrow =
+            new EscrowERC20(proofTokenAddress, proofRecipient, TRANSFER_AMOUNT, enclave.addr, REWARD_AMOUNT, 0);
         vm.stopPrank();
 
         console.log("Proof escrow address:", address(proofEscrow));
@@ -86,7 +84,7 @@ contract EscrowMPTTest is Test {
 
         // Bond as executor, gated by the enclave's BondAuth signature
         vm.prank(proofExecutor);
-        proofEscrow.bond(BondAuth.sign(vm, enclave.privateKey, address(proofEscrow), proofExecutor));
+        proofEscrow.bond(0, BondAuth.sign(vm, enclave.privateKey, address(proofEscrow), proofExecutor));
 
         vm.roll(TARGET_BLOCK_NUMBER + 10);
         vm.setBlockhash(TARGET_BLOCK_NUMBER, TARGET_BLOCK_HASH);
@@ -127,18 +125,11 @@ contract EscrowMPTTest is Test {
         vm.startPrank(deployer);
 
         // Create native ETH escrow
-        // Pass 0, 0, 0 to defer funding (constructor auto-funds if non-zero)
-        EscrowNative proofEscrow = new EscrowNative(
-            proofRecipient,
-            expectedAmount,
-            enclave.addr,
-            0, // reward - defer to fund
-            0 // bond - defer to fund
-        );
+        // Pass a zero reward to defer funding (constructor auto-funds if non-zero).
+        EscrowNative proofEscrow = new EscrowNative(proofRecipient, expectedAmount, enclave.addr, 0, 0);
 
-        // Fund the escrow with ETH (reward + payment + bond pot).
-        // Payment == expectedAmount internally, so value = reward + expectedAmount + bond.
-        proofEscrow.fund{value: 0.5 ether + expectedAmount + 0.25 ether}(0.5 ether, 0.25 ether);
+        // Fund the escrow with reward + recipient principal only.
+        proofEscrow.fund{value: 0.5 ether + expectedAmount}(0.5 ether);
         vm.stopPrank();
 
         console.log("Native proof escrow address:", address(proofEscrow));
@@ -148,7 +139,7 @@ contract EscrowMPTTest is Test {
         address executor = makeAddr("executor");
         vm.deal(executor, 1 ether);
         vm.prank(executor);
-        proofEscrow.bond(BondAuth.sign(vm, enclave.privateKey, address(proofEscrow), executor));
+        proofEscrow.bond(0, BondAuth.sign(vm, enclave.privateKey, address(proofEscrow), executor));
 
         vm.roll(targetBlockNumber + 10);
         vm.setBlockhash(targetBlockNumber, targetBlockHash);

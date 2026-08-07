@@ -95,13 +95,15 @@ contract EscrowBatch {
     error InvalidTransferIndex();
     error TransferStateConflict();
     error Reentrancy();
+    error GasAdvanceTooLarge();
+    error GasAdvanceBudgetExceedsReward();
 
     // ============ Storage ============
 
     bytes32 private constant _DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 private constant _BOND_TYPEHASH =
-        keccak256("BatchBondAuth(address bondingExecutor,uint256[] transferIndexes)");
+        keccak256("BatchBondAuth(address bondingExecutor,uint256[] transferIndexes,uint256 gasAdvance)");
     bytes32 private constant _NAME_HASH = keccak256("MirageEscrow");
     bytes32 private constant _VERSION_HASH = keccak256("1");
     bytes32 private immutable _domainSeparator;
@@ -110,6 +112,8 @@ contract EscrowBatch {
     address public immutable rewardAsset;
     uint256 public immutable totalTransferAmount;
     uint256 public immutable totalValueWeight;
+    /// @notice Quote-time reward budget reserved for fresh-EOA gas provisioning.
+    uint256 public immutable maxGasAdvance;
 
     uint256 public currentRewardAmount;
     uint256 public currentTransferAmount;
@@ -117,6 +121,7 @@ contract EscrowBatch {
     uint256 public originalRewardAmount;
     uint256 public completedTransferCount;
     uint256 public activeBidCount;
+    uint256 public totalGasAdvanced;
 
     uint256 public constant MAX_BLOCK_LOOKBACK = 256;
     uint256 public constant BID_DURATION = 5 minutes;
@@ -167,6 +172,7 @@ contract EscrowBatch {
         address _rewardAsset,
         BatchTransfer[] memory _expectedTransfers,
         uint256 _currentRewardAmount,
+        uint256 _maxGasAdvance,
         address[] memory _blindedSigners
     ) payable {
         if (_expectedTransfers.length == 0) revert EmptyBatch();
@@ -175,6 +181,7 @@ contract EscrowBatch {
         if (_blindedSigners.length > MAX_BLINDED_SIGNERS) revert TooManyBlindedSigners();
 
         rewardAsset = _rewardAsset;
+        maxGasAdvance = _maxGasAdvance;
         deployerAddress = msg.sender;
         _domainSeparator =
             keccak256(abi.encode(_DOMAIN_TYPEHASH, _NAME_HASH, _VERSION_HASH, block.chainid, address(this)));
@@ -251,6 +258,15 @@ contract EscrowBatch {
 
     function bidTransferIndex(address bidder, uint256 position) external view returns (uint256) {
         return bidTransferIndexes[bidder][position];
+    }
+
+    /// @notice Reward funds still available to bootstrap future bidders.
+    /// The limit applies across the entire escrow, not independently per bid.
+    function remainingGasAdvance() public view returns (uint256) {
+        if (totalGasAdvanced >= maxGasAdvance) return 0;
+
+        uint256 allowance = maxGasAdvance - totalGasAdvanced;
+        return Math.min(allowance, currentRewardAmount);
     }
 
     /// @notice Whether at least one bid is still inside its execution window.
@@ -338,11 +354,15 @@ contract EscrowBatch {
     /// @notice Place a free bid on a subset of expected transfers.
     /// @dev The signature binds this escrow, chain, bidder, and exact row indexes.
     /// Its recovered blinded signer must be constructor-approved and unused.
-    function bid(uint256[] calldata transferIndexes, bytes calldata bidSignature) external nonReentrant {
+    function bid(uint256[] calldata transferIndexes, uint256 gasAdvance, bytes calldata bidSignature)
+        external
+        nonReentrant
+    {
         _handleExpiredBids();
         _validateBidRequirements(transferIndexes);
+        if (gasAdvance > remainingGasAdvance()) revert GasAdvanceTooLarge();
 
-        address signer = ECDSA.recover(_hashBidAuthorization(msg.sender, transferIndexes), bidSignature);
+        address signer = ECDSA.recover(_hashBidAuthorization(msg.sender, transferIndexes, gasAdvance), bidSignature);
         if (!isBlindedSigner[signer]) revert InvalidBidSignature();
         if (blindedSignerUsed[signer]) revert BlindedSignerAlreadyUsed();
 
@@ -365,6 +385,12 @@ contract EscrowBatch {
             unchecked {
                 ++i;
             }
+        }
+
+        if (gasAdvance > 0) {
+            totalGasAdvanced += gasAdvance;
+            currentRewardAmount -= gasAdvance;
+            _sendAsset(rewardAsset, msg.sender, gasAdvance);
         }
     }
 
@@ -467,13 +493,14 @@ contract EscrowBatch {
 
     // ============ Internal: bid authorization ============
 
-    function _hashBidAuthorization(address bondingExecutor, uint256[] calldata transferIndexes)
+    function _hashBidAuthorization(address bondingExecutor, uint256[] calldata transferIndexes, uint256 gasAdvance)
         internal
         view
         returns (bytes32)
     {
-        bytes32 structHash =
-            keccak256(abi.encode(_BOND_TYPEHASH, bondingExecutor, keccak256(abi.encodePacked(transferIndexes))));
+        bytes32 structHash = keccak256(
+            abi.encode(_BOND_TYPEHASH, bondingExecutor, keccak256(abi.encodePacked(transferIndexes)), gasAdvance)
+        );
         return keccak256(abi.encodePacked("\x19\x01", _domainSeparator, structHash));
     }
 
@@ -481,6 +508,7 @@ contract EscrowBatch {
 
     function _fund(uint256 _currentRewardAmount) internal {
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
+        if (maxGasAdvance > _currentRewardAmount) revert GasAdvanceBudgetExceedsReward();
 
         // msg.value must cover any native transfers in the batch plus, if the
         // reward currency is ETH, the reward amount itself.
@@ -495,6 +523,7 @@ contract EscrowBatch {
         currentTransferAmount = totalTransferAmount;
         currentValueWeight = totalValueWeight;
         completedTransferCount = 0;
+        totalGasAdvanced = 0;
         hasBeenFunded = true;
         funded = true;
 

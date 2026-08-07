@@ -36,7 +36,7 @@ Batch escrow for one or more expected transfers. A bidder uses a constructor-app
 - `MPTVerifier.sol` verifies transaction and receipt trie inclusion.
 - `ReceiptValidator.sol` validates receipt status, ERC-20 transfer logs, and native transfer fields.
 - `RLPParser.sol` provides low-level RLP helpers.
-- `utils/ECDSA.sol` recovers `BondAuth` signers.
+- `utils/ECDSA.sol` recovers `BondAuth` / `BatchBondAuth` signers.
 
 ## Dependency graph
 

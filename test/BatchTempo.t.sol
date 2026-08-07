@@ -73,7 +73,7 @@ contract BatchTempoTest is Test {
         address[] memory signers = new address[](1);
         signers[0] = vm.addr(BLINDED_SIGNER_KEY);
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, REWARD_AMOUNT, signers);
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, REWARD_AMOUNT, 0, signers);
 
         uint256[] memory bidIndexes = new uint256[](3);
         bidIndexes[0] = 0;
@@ -82,7 +82,7 @@ contract BatchTempoTest is Test {
 
         bytes memory bidSignature = BatchBondAuth.sign(vm, BLINDED_SIGNER_KEY, address(escrow), BIDDER, bidIndexes);
         vm.prank(BIDDER);
-        escrow.bid(bidIndexes, bidSignature);
+        escrow.bid(bidIndexes, 0, bidSignature);
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, keccak256(BLOCK_HEADER));

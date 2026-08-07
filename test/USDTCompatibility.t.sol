@@ -61,7 +61,6 @@ contract USDTCompatibilityTest is Test {
     uint256 private constant PAYMENT_AMOUNT = 100e6;
     uint256 private constant REWARD_AMOUNT = 10e6;
     uint256 private constant BATCH_SIGNER_KEY = 8_008;
-    uint256 private constant BOND_POT = 0.01 ether;
 
     function setUp() public {
         token = new NoReturnERC20();
@@ -71,7 +70,6 @@ contract USDTCompatibilityTest is Test {
         blindedSigner = makeAddr("blindedSigner");
 
         token.mint(deployer, 1_000e6);
-        vm.deal(deployer, BOND_POT);
     }
 
     function testERC20FundingAndWithdrawalAcceptNoReturnData() public {
@@ -80,8 +78,7 @@ contract USDTCompatibilityTest is Test {
         vm.startPrank(deployer);
         address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow, escrowAmount);
-        EscrowERC20 escrow =
-            new EscrowERC20{value: BOND_POT}(address(token), recipient, PAYMENT_AMOUNT, blindedSigner, REWARD_AMOUNT);
+        EscrowERC20 escrow = new EscrowERC20(address(token), recipient, PAYMENT_AMOUNT, blindedSigner, REWARD_AMOUNT, 0);
         vm.stopPrank();
 
         assertTrue(escrow.funded());
@@ -101,9 +98,7 @@ contract USDTCompatibilityTest is Test {
 
         vm.startPrank(deployer);
         vm.expectRevert(abi.encodeWithSelector(SafeERC20.SafeERC20FailedOperation.selector, address(falseReturnToken)));
-        new EscrowERC20{value: BOND_POT}(
-            address(falseReturnToken), recipient, PAYMENT_AMOUNT, blindedSigner, REWARD_AMOUNT
-        );
+        new EscrowERC20(address(falseReturnToken), recipient, PAYMENT_AMOUNT, blindedSigner, REWARD_AMOUNT, 0);
         vm.stopPrank();
     }
 
@@ -119,7 +114,7 @@ contract USDTCompatibilityTest is Test {
         token.approve(futureEscrow, escrowAmount);
         address[] memory signers = new address[](1);
         signers[0] = vm.addr(BATCH_SIGNER_KEY);
-        EscrowBatch escrow = new EscrowBatch(address(token), transfers, REWARD_AMOUNT, signers);
+        EscrowBatch escrow = new EscrowBatch(address(token), transfers, REWARD_AMOUNT, 0, signers);
         vm.stopPrank();
 
         assertTrue(escrow.funded());
@@ -129,7 +124,7 @@ contract USDTCompatibilityTest is Test {
         indexes[0] = 0;
         bytes memory signature = BatchBondAuth.sign(vm, BATCH_SIGNER_KEY, address(escrow), bidder, indexes);
         vm.prank(bidder);
-        escrow.bid(indexes, signature);
+        escrow.bid(indexes, 0, signature);
 
         assertEq(token.balanceOf(address(escrow)), escrowAmount);
 

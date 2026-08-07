@@ -12,7 +12,7 @@ library BatchBondAuth {
     bytes32 private constant _DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 private constant _BOND_TYPEHASH =
-        keccak256("BatchBondAuth(address bondingExecutor,uint256[] transferIndexes)");
+        keccak256("BatchBondAuth(address bondingExecutor,uint256[] transferIndexes,uint256 gasAdvance)");
     bytes32 private constant _NAME_HASH = keccak256("MirageEscrow");
     bytes32 private constant _VERSION_HASH = keccak256("1");
 
@@ -23,10 +23,19 @@ library BatchBondAuth {
         view
         returns (bytes32)
     {
+        return digest(escrow, bondingExecutor, transferIndexes, 0);
+    }
+
+    function digest(address escrow, address bondingExecutor, uint256[] memory transferIndexes, uint256 gasAdvance)
+        internal
+        view
+        returns (bytes32)
+    {
         bytes32 domainSeparator =
             keccak256(abi.encode(_DOMAIN_TYPEHASH, _NAME_HASH, _VERSION_HASH, block.chainid, escrow));
-        bytes32 structHash =
-            keccak256(abi.encode(_BOND_TYPEHASH, bondingExecutor, keccak256(abi.encodePacked(transferIndexes))));
+        bytes32 structHash = keccak256(
+            abi.encode(_BOND_TYPEHASH, bondingExecutor, keccak256(abi.encodePacked(transferIndexes)), gasAdvance)
+        );
         return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
     }
 
@@ -37,7 +46,20 @@ library BatchBondAuth {
         view
         returns (bytes memory)
     {
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerKey, digest(escrow, bondingExecutor, transferIndexes));
+        return sign(vm, signerKey, escrow, bondingExecutor, transferIndexes, 0);
+    }
+
+    function sign(
+        Vm vm,
+        uint256 signerKey,
+        address escrow,
+        address bondingExecutor,
+        uint256[] memory transferIndexes,
+        uint256 gasAdvance
+    ) internal view returns (bytes memory) {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(
+            signerKey, digest(escrow, bondingExecutor, transferIndexes, gasAdvance)
+        );
         return abi.encodePacked(r, s, v);
     }
 }
