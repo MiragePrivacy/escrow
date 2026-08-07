@@ -78,7 +78,7 @@ contract USDTCompatibilityTest is Test {
         vm.startPrank(deployer);
         address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow, escrowAmount);
-        EscrowERC20 escrow = new EscrowERC20(address(token), recipient, PAYMENT_AMOUNT, blindedSigner, REWARD_AMOUNT);
+        EscrowERC20 escrow = new EscrowERC20(address(token), recipient, PAYMENT_AMOUNT, blindedSigner, REWARD_AMOUNT, 0);
         vm.stopPrank();
 
         assertTrue(escrow.funded());
@@ -98,7 +98,7 @@ contract USDTCompatibilityTest is Test {
 
         vm.startPrank(deployer);
         vm.expectRevert(abi.encodeWithSelector(SafeERC20.SafeERC20FailedOperation.selector, address(falseReturnToken)));
-        new EscrowERC20(address(falseReturnToken), recipient, PAYMENT_AMOUNT, blindedSigner, REWARD_AMOUNT);
+        new EscrowERC20(address(falseReturnToken), recipient, PAYMENT_AMOUNT, blindedSigner, REWARD_AMOUNT, 0);
         vm.stopPrank();
     }
 
@@ -114,7 +114,7 @@ contract USDTCompatibilityTest is Test {
         token.approve(futureEscrow, escrowAmount);
         address[] memory signers = new address[](1);
         signers[0] = vm.addr(BATCH_SIGNER_KEY);
-        EscrowBatch escrow = new EscrowBatch(address(token), transfers, REWARD_AMOUNT, signers);
+        EscrowBatch escrow = new EscrowBatch(address(token), transfers, REWARD_AMOUNT, 0, signers);
         vm.stopPrank();
 
         assertTrue(escrow.funded());

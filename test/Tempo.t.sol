@@ -106,7 +106,7 @@ contract TempoTest is Test {
 
         Vm.Wallet memory enclave = vm.createWallet("enclave");
         vm.prank(deployer);
-        EscrowERC20 escrow = new EscrowERC20(TOKEN, TO_ADDRESS, AMOUNT, enclave.addr, 500e18);
+        EscrowERC20 escrow = new EscrowERC20(TOKEN, TO_ADDRESS, AMOUNT, enclave.addr, 500e18, 0);
 
         vm.prank(FROM_ADDRESS);
         escrow.bond(0, BondAuth.sign(vm, enclave.privateKey, address(escrow), FROM_ADDRESS));
@@ -138,7 +138,7 @@ contract TempoTest is Test {
         transfers[1] = _erc20BatchTransfer(FEE_RECIPIENT, FEE_AMOUNT);
 
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, _batchSigners());
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, 0, _batchSigners());
 
         uint256[] memory transferIndexes = new uint256[](2);
         transferIndexes[0] = 0;
@@ -183,7 +183,7 @@ contract TempoTest is Test {
         transfers[1] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
 
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, _batchSigners());
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, 0, _batchSigners());
 
         uint256[] memory transferIndexes = new uint256[](2);
         transferIndexes[0] = 0;
@@ -229,7 +229,7 @@ contract TempoTest is Test {
         transfers[1] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
 
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, _batchSigners());
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, 0, _batchSigners());
 
         uint256[] memory transferIndexes = new uint256[](2);
         transferIndexes[0] = 0;
@@ -286,7 +286,7 @@ contract TempoTest is Test {
         transfers[0] = _erc20BatchTransfer(TO_ADDRESS, AMOUNT);
 
         vm.prank(deployer);
-        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, _batchSigners());
+        EscrowBatch escrow = new EscrowBatch(TOKEN, transfers, 500e18, 0, _batchSigners());
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);

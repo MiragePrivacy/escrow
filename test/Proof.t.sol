@@ -72,7 +72,7 @@ contract EscrowMPTTest is Test {
         vm.mockCall(proofTokenAddress, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
 
         EscrowERC20 proofEscrow =
-            new EscrowERC20(proofTokenAddress, proofRecipient, TRANSFER_AMOUNT, enclave.addr, REWARD_AMOUNT);
+            new EscrowERC20(proofTokenAddress, proofRecipient, TRANSFER_AMOUNT, enclave.addr, REWARD_AMOUNT, 0);
         vm.stopPrank();
 
         console.log("Proof escrow address:", address(proofEscrow));
@@ -126,7 +126,7 @@ contract EscrowMPTTest is Test {
 
         // Create native ETH escrow
         // Pass a zero reward to defer funding (constructor auto-funds if non-zero).
-        EscrowNative proofEscrow = new EscrowNative(proofRecipient, expectedAmount, enclave.addr, 0);
+        EscrowNative proofEscrow = new EscrowNative(proofRecipient, expectedAmount, enclave.addr, 0, 0);
 
         // Fund the escrow with reward + recipient principal only.
         proofEscrow.fund{value: 0.5 ether + expectedAmount}(0.5 ether);

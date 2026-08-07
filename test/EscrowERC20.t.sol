@@ -53,6 +53,7 @@ contract EscrowERC20Test is Test {
 
     uint256 constant EXPECTED_AMOUNT = 1000e18;
     uint256 constant REWARD_AMOUNT = 500e18;
+    uint256 constant GAS_ADVANCE_BUDGET = REWARD_AMOUNT / 2;
     uint256 constant PAYMENT_AMOUNT = EXPECTED_AMOUNT;
 
     function setUp() public {
@@ -71,14 +72,16 @@ contract EscrowERC20Test is Test {
         address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow, REWARD_AMOUNT + PAYMENT_AMOUNT);
 
-        escrow = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT);
+        escrow = new EscrowERC20(
+            address(token), recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, GAS_ADVANCE_BUDGET
+        );
         vm.stopPrank();
     }
 
     // Deploys an unfunded escrow (constructor defers fund()).
     function _newUnfunded() internal returns (EscrowERC20) {
         vm.prank(deployer);
-        return new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, enclave.addr, 0);
+        return new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, enclave.addr, 0, GAS_ADVANCE_BUDGET);
     }
 
     // Signs a valid BondAuth for `bondingExecutor` against `escrowAddr`.
@@ -98,6 +101,7 @@ contract EscrowERC20Test is Test {
         assertEq(escrow.expectedRecipient(), recipient);
         assertEq(escrow.expectedAmount(), EXPECTED_AMOUNT);
         assertEq(escrow.blindedSigner(), enclave.addr);
+        assertEq(escrow.maxGasAdvance(), GAS_ADVANCE_BUDGET);
         assertEq(escrow.deployerAddress(), deployer);
         assertEq(address(escrow).balance, 0);
         assertEq(token.balanceOf(address(escrow)), REWARD_AMOUNT + PAYMENT_AMOUNT);
@@ -109,7 +113,8 @@ contract EscrowERC20Test is Test {
         address futureEscrow2 = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow2, REWARD_AMOUNT + PAYMENT_AMOUNT);
 
-        EscrowERC20 escrow2 = new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, enclave.addr, 0);
+        EscrowERC20 escrow2 =
+            new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, enclave.addr, 0, GAS_ADVANCE_BUDGET);
 
         token.approve(address(escrow2), REWARD_AMOUNT + PAYMENT_AMOUNT);
         escrow2.fund(REWARD_AMOUNT);
@@ -178,12 +183,21 @@ contract EscrowERC20Test is Test {
         assertTrue(escrow.gasAdvanceClaimed());
     }
 
-    function testBondRejectsAdvanceAboveHalfReward() public {
+    function testBondRejectsAdvanceAboveConfiguredBudget() public {
         uint256 gasAdvance = REWARD_AMOUNT / 2 + 1;
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.GasAdvanceTooLarge.selector);
         escrow.bond(gasAdvance, BondAuth.sign(vm, enclave.privateKey, address(escrow), executor, gasAdvance));
+    }
+
+    function testConstructorRejectsGasAdvanceBudgetAboveReward() public {
+        vm.startPrank(deployer);
+        address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
+        token.approve(futureEscrow, REWARD_AMOUNT + PAYMENT_AMOUNT);
+        vm.expectRevert(EscrowBase.GasAdvanceBudgetExceedsReward.selector);
+        new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, REWARD_AMOUNT + 1);
+        vm.stopPrank();
     }
 
     function testBondSignatureBindsGasAdvance() public {

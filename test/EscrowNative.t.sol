@@ -19,6 +19,7 @@ contract EscrowNativeTest is Test {
 
     uint256 constant EXPECTED_AMOUNT = 1 ether;
     uint256 constant REWARD_AMOUNT = 0.5 ether;
+    uint256 constant GAS_ADVANCE_BUDGET = REWARD_AMOUNT / 2;
     uint256 constant PAYMENT_AMOUNT = EXPECTED_AMOUNT;
     uint256 constant TOTAL = REWARD_AMOUNT + PAYMENT_AMOUNT;
 
@@ -34,12 +35,13 @@ contract EscrowNativeTest is Test {
         vm.deal(other, 100 ether);
 
         vm.prank(deployer);
-        escrow = new EscrowNative{value: TOTAL}(recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT);
+        escrow =
+            new EscrowNative{value: TOTAL}(recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, GAS_ADVANCE_BUDGET);
     }
 
     function _newUnfunded() internal returns (EscrowNative) {
         vm.prank(deployer);
-        return new EscrowNative(recipient, EXPECTED_AMOUNT, enclave.addr, 0);
+        return new EscrowNative(recipient, EXPECTED_AMOUNT, enclave.addr, 0, GAS_ADVANCE_BUDGET);
     }
 
     function _sig(address escrowAddr, address bondingExecutor) internal view returns (bytes memory) {
@@ -59,6 +61,7 @@ contract EscrowNativeTest is Test {
         assertEq(escrow.expectedRecipient(), recipient);
         assertEq(escrow.expectedAmount(), EXPECTED_AMOUNT);
         assertEq(escrow.blindedSigner(), enclave.addr);
+        assertEq(escrow.maxGasAdvance(), GAS_ADVANCE_BUDGET);
         assertEq(escrow.deployerAddress(), deployer);
         assertEq(address(escrow).balance, TOTAL);
     }
@@ -82,7 +85,7 @@ contract EscrowNativeTest is Test {
         vm.prank(deployer);
         vm.expectRevert(EscrowNative.IncorrectETHAmount.selector);
         new EscrowNative{value: 0.5 ether}( // Wrong amount - should be TOTAL
-            recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT
+            recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, GAS_ADVANCE_BUDGET
         );
     }
 
@@ -154,12 +157,18 @@ contract EscrowNativeTest is Test {
         assertTrue(escrow.gasAdvanceClaimed());
     }
 
-    function testBondNativeRejectsAdvanceAboveHalfReward() public {
+    function testBondNativeRejectsAdvanceAboveConfiguredBudget() public {
         uint256 gasAdvance = REWARD_AMOUNT / 2 + 1;
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.GasAdvanceTooLarge.selector);
         escrow.bond(gasAdvance, BondAuth.sign(vm, enclave.privateKey, address(escrow), executor, gasAdvance));
+    }
+
+    function testConstructorNativeRejectsGasAdvanceBudgetAboveReward() public {
+        vm.prank(deployer);
+        vm.expectRevert(EscrowBase.GasAdvanceBudgetExceedsReward.selector);
+        new EscrowNative{value: TOTAL}(recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, REWARD_AMOUNT + 1);
     }
 
     function testBondNativeInvalidSignature() public {
