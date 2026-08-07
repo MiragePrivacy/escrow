@@ -109,7 +109,7 @@ contract TempoTest is Test {
         EscrowERC20 escrow = new EscrowERC20(TOKEN, TO_ADDRESS, AMOUNT, enclave.addr, 500e18);
 
         vm.prank(FROM_ADDRESS);
-        escrow.bond(BondAuth.sign(vm, enclave.privateKey, address(escrow), FROM_ADDRESS));
+        escrow.bond(0, BondAuth.sign(vm, enclave.privateKey, address(escrow), FROM_ADDRESS));
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
@@ -344,6 +344,6 @@ contract TempoTest is Test {
         bytes memory signature =
             BatchBondAuth.sign(vm, BATCH_SIGNER_KEY, address(escrow), FROM_ADDRESS, transferIndexes);
         vm.prank(FROM_ADDRESS);
-        escrow.bid(transferIndexes, signature);
+        escrow.bid(transferIndexes, 0, signature);
     }
 }

@@ -289,6 +289,62 @@ contract EscrowBatchTest is Test {
         assertTrue(escrow.is_bonded());
     }
 
+    function testBidAdvancesRewardTokens() public {
+        uint256 gasAdvance = REWARD_AMOUNT / 4;
+        uint256[] memory indexes = _singleIndex(0);
+        bytes memory signature =
+            BatchBondAuth.sign(vm, BLINDED_SIGNER_KEY_BASE, address(escrow), bidder, indexes, gasAdvance);
+        uint256 bidderBefore = token.balanceOf(bidder);
+
+        vm.prank(bidder);
+        escrow.bid(indexes, gasAdvance, signature);
+
+        assertEq(token.balanceOf(bidder), bidderBefore + gasAdvance);
+        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT - gasAdvance);
+        assertEq(escrow.totalGasAdvanced(), gasAdvance);
+        assertEq(escrow.remainingGasAdvance(), REWARD_AMOUNT / 2 - gasAdvance);
+    }
+
+    function testBidSignatureBindsGasAdvance() public {
+        uint256[] memory indexes = _singleIndex(0);
+        uint256 signedAdvance = REWARD_AMOUNT / 4;
+        bytes memory signature =
+            BatchBondAuth.sign(vm, BLINDED_SIGNER_KEY_BASE, address(escrow), bidder, indexes, signedAdvance);
+
+        vm.prank(bidder);
+        vm.expectRevert(EscrowBatch.InvalidBidSignature.selector);
+        escrow.bid(indexes, signedAdvance + 1, signature);
+    }
+
+    function testBidAdvancesShareOneEscrowWideLimit() public {
+        uint256 firstAdvance = REWARD_AMOUNT * 2 / 5;
+        uint256 remainingAdvance = REWARD_AMOUNT / 10;
+        uint256[] memory firstIndexes = _singleIndex(0);
+        uint256[] memory secondIndexes = _singleIndex(1);
+
+        bytes memory firstSignature =
+            BatchBondAuth.sign(vm, BLINDED_SIGNER_KEY_BASE, address(escrow), bidder, firstIndexes, firstAdvance);
+        vm.prank(bidder);
+        escrow.bid(firstIndexes, firstAdvance, firstSignature);
+
+        bytes memory excessiveSignature = BatchBondAuth.sign(
+            vm, BLINDED_SIGNER_KEY_BASE + 1, address(escrow), other, secondIndexes, remainingAdvance + 1
+        );
+        vm.prank(other);
+        vm.expectRevert(EscrowBatch.GasAdvanceTooLarge.selector);
+        escrow.bid(secondIndexes, remainingAdvance + 1, excessiveSignature);
+
+        bytes memory remainingSignature = BatchBondAuth.sign(
+            vm, BLINDED_SIGNER_KEY_BASE + 1, address(escrow), other, secondIndexes, remainingAdvance
+        );
+        vm.prank(other);
+        escrow.bid(secondIndexes, remainingAdvance, remainingSignature);
+
+        assertEq(escrow.totalGasAdvanced(), REWARD_AMOUNT / 2);
+        assertEq(escrow.remainingGasAdvance(), 0);
+        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT / 2);
+    }
+
     function testIsBondedIgnoresExpiredBidBeforeCleanup() public {
         _placeBid(_singleIndex(0));
         vm.warp(block.timestamp + escrow.BID_DURATION() + 1);
@@ -312,7 +368,7 @@ contract EscrowBatchTest is Test {
         bytes memory signature = _nextBidSignature(address(escrow), other, indexes);
         vm.prank(other);
         vm.expectRevert(EscrowBatch.TransferStateConflict.selector);
-        escrow.bid(indexes, signature);
+        escrow.bid(indexes, 0, signature);
     }
 
     function testBidRejectsDuplicateTransferIndex() public {
@@ -323,7 +379,7 @@ contract EscrowBatchTest is Test {
         bytes memory signature = _nextBidSignature(address(escrow), bidder, duplicateIndexes);
         vm.prank(bidder);
         vm.expectRevert(EscrowBatch.DuplicateProofItem.selector);
-        escrow.bid(duplicateIndexes, signature);
+        escrow.bid(duplicateIndexes, 0, signature);
     }
 
     function testBidRejectsUnauthorizedSigner() public {
@@ -332,7 +388,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(bidder);
         vm.expectRevert(EscrowBatch.InvalidBidSignature.selector);
-        escrow.bid(indexes, signature);
+        escrow.bid(indexes, 0, signature);
     }
 
     function testBidSignatureCannotBeUsedByAnotherExecutor() public {
@@ -341,7 +397,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(other);
         vm.expectRevert(EscrowBatch.InvalidBidSignature.selector);
-        escrow.bid(indexes, signature);
+        escrow.bid(indexes, 0, signature);
     }
 
     function testBidSignatureCannotAuthorizeDifferentRows() public {
@@ -350,7 +406,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(bidder);
         vm.expectRevert(EscrowBatch.InvalidBidSignature.selector);
-        escrow.bid(_singleIndex(1), signature);
+        escrow.bid(_singleIndex(1), 0, signature);
     }
 
     function testBidSignatureCannotBeUsedForAnotherEscrow() public {
@@ -360,7 +416,7 @@ contract EscrowBatchTest is Test {
 
         vm.prank(bidder);
         vm.expectRevert(EscrowBatch.InvalidBidSignature.selector);
-        otherEscrow.bid(indexes, signature);
+        otherEscrow.bid(indexes, 0, signature);
     }
 
     function testDomainSeparatorBindsDeploymentChain() public view {
@@ -378,14 +434,14 @@ contract EscrowBatchTest is Test {
         bytes memory signature = BatchBondAuth.sign(vm, BLINDED_SIGNER_KEY_BASE, address(escrow), bidder, indexes);
 
         vm.prank(bidder);
-        escrow.bid(indexes, signature);
+        escrow.bid(indexes, 0, signature);
 
         vm.warp(block.timestamp + escrow.BID_DURATION() + 1);
         escrow.expireBid(bidder);
 
         vm.prank(bidder);
         vm.expectRevert(EscrowBatch.BlindedSignerAlreadyUsed.selector);
-        escrow.bid(indexes, signature);
+        escrow.bid(indexes, 0, signature);
 
         assertEq(escrow.activeBidCount(), 0);
         assertEq(escrow.transferBidder(0), address(0));
@@ -493,7 +549,7 @@ contract EscrowBatchTest is Test {
         bytes memory completedSignature = _nextBidSignature(address(partialEscrow), other, completedIndex);
         vm.expectRevert(EscrowBatch.TransferStateConflict.selector);
         vm.prank(other);
-        partialEscrow.bid(completedIndex, completedSignature);
+        partialEscrow.bid(completedIndex, 0, completedSignature);
 
         vm.warp(block.timestamp + partialEscrow.BID_DURATION() + 1);
         _placeBidAs(partialEscrow, other, _singleIndex(9));
@@ -660,6 +716,29 @@ contract EscrowBatchTest is Test {
         assertEq(address(ethEscrow).balance, REWARD_AMOUNT);
     }
 
+    function testNativeRewardEscrowAdvancesEth() public {
+        EscrowBatch.BatchTransfer[] memory transfers = _batch();
+        vm.deal(deployer, REWARD_AMOUNT);
+        vm.startPrank(deployer);
+        token.approve(vm.computeCreateAddress(deployer, vm.getNonce(deployer)), PAYMENT_AMOUNT);
+        EscrowBatch ethEscrow =
+            new EscrowBatch{value: REWARD_AMOUNT}(address(0), transfers, REWARD_AMOUNT, _blindedSigners(16));
+        vm.stopPrank();
+
+        uint256 gasAdvance = REWARD_AMOUNT / 4;
+        uint256[] memory indexes = _fullIndexes();
+        bytes memory signature =
+            BatchBondAuth.sign(vm, BLINDED_SIGNER_KEY_BASE, address(ethEscrow), bidder, indexes, gasAdvance);
+        uint256 bidderBefore = bidder.balance;
+
+        vm.prank(bidder);
+        ethEscrow.bid(indexes, gasAdvance, signature);
+
+        assertEq(bidder.balance, bidderBefore + gasAdvance);
+        assertEq(address(ethEscrow).balance, REWARD_AMOUNT - gasAdvance);
+        assertEq(ethEscrow.currentRewardAmount(), REWARD_AMOUNT - gasAdvance);
+    }
+
     function testFreeBidDoesNotRequireNativeValue() public {
         EscrowBatch.BatchTransfer[] memory transfers = _batch();
         vm.deal(deployer, REWARD_AMOUNT);
@@ -680,7 +759,7 @@ contract EscrowBatchTest is Test {
         vm.deal(bidder, 1 ether);
         vm.prank(bidder);
         (bool succeeded,) =
-            address(escrow).call{value: 1}(abi.encodeWithSelector(escrow.bid.selector, indexes, signature));
+            address(escrow).call{value: 1}(abi.encodeWithSelector(escrow.bid.selector, indexes, 0, signature));
 
         assertFalse(succeeded);
     }
@@ -723,7 +802,7 @@ contract EscrowBatchTest is Test {
     function _placeBidAs(EscrowBatch target, address biddingExecutor, uint256[] memory transferIndexes) internal {
         bytes memory signature = _nextBidSignature(address(target), biddingExecutor, transferIndexes);
         vm.prank(biddingExecutor);
-        target.bid(transferIndexes, signature);
+        target.bid(transferIndexes, 0, signature);
     }
 
     function _nextBidSignature(address target, address biddingExecutor, uint256[] memory transferIndexes)

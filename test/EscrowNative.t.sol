@@ -48,7 +48,7 @@ contract EscrowNativeTest is Test {
 
     function _bondExecutor() internal {
         vm.prank(executor);
-        escrow.bond(_sig(address(escrow), executor));
+        escrow.bond(0, _sig(address(escrow), executor));
     }
 
     function testConstructorNative() public view {
@@ -140,13 +140,35 @@ contract EscrowNativeTest is Test {
         assertEq(executor.balance, executorBefore);
     }
 
+    function testBondNativeAdvancesRewardEth() public {
+        uint256 gasAdvance = REWARD_AMOUNT / 4;
+        uint256 executorBefore = executor.balance;
+
+        vm.prank(executor);
+        escrow.bond(gasAdvance, BondAuth.sign(vm, enclave.privateKey, address(escrow), executor, gasAdvance));
+
+        assertEq(executor.balance, executorBefore + gasAdvance);
+        assertEq(address(escrow).balance, TOTAL - gasAdvance);
+        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT - gasAdvance);
+        assertEq(escrow.remainingGasAdvance(), 0);
+        assertTrue(escrow.gasAdvanceClaimed());
+    }
+
+    function testBondNativeRejectsAdvanceAboveHalfReward() public {
+        uint256 gasAdvance = REWARD_AMOUNT / 2 + 1;
+
+        vm.prank(executor);
+        vm.expectRevert(EscrowBase.GasAdvanceTooLarge.selector);
+        escrow.bond(gasAdvance, BondAuth.sign(vm, enclave.privateKey, address(escrow), executor, gasAdvance));
+    }
+
     function testBondNativeInvalidSignature() public {
         Vm.Wallet memory attacker = vm.createWallet("attacker");
         bytes memory badSig = BondAuth.sign(vm, attacker.privateKey, address(escrow), executor);
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.InvalidBondSignature.selector);
-        escrow.bond(badSig);
+        escrow.bond(0, badSig);
     }
 
     function testBondNativeSignatureBoundToCaller() public {
@@ -154,14 +176,14 @@ contract EscrowNativeTest is Test {
 
         vm.prank(other);
         vm.expectRevert(EscrowBase.InvalidBondSignature.selector);
-        escrow.bond(sigForExecutor);
+        escrow.bond(0, sigForExecutor);
     }
 
     function testBondNativeNotFunded() public {
         EscrowNative unfunded = _newUnfunded();
         vm.prank(executor);
         vm.expectRevert(EscrowBase.NotFunded.selector);
-        unfunded.bond(_sig(address(unfunded), executor));
+        unfunded.bond(0, _sig(address(unfunded), executor));
     }
 
     function testBondNativeCancellationRequested() public {
@@ -170,7 +192,7 @@ contract EscrowNativeTest is Test {
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.CancellationRequested.selector);
-        escrow.bond(_sig(address(escrow), executor));
+        escrow.bond(0, _sig(address(escrow), executor));
     }
 
     // An expired reservation frees the lock for a fresh enclave-authorized EOA.
@@ -181,7 +203,7 @@ contract EscrowNativeTest is Test {
 
         uint256 otherBefore = other.balance;
         vm.prank(other);
-        escrow.bond(_sig(address(escrow), other));
+        escrow.bond(0, _sig(address(escrow), other));
 
         assertEq(escrow.bondedExecutor(), other);
         assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT);
@@ -254,7 +276,7 @@ contract EscrowNativeTest is Test {
         _bondExecutor();
         vm.prank(other);
         vm.expectRevert(EscrowBase.ExecutorAlreadyBonded.selector);
-        escrow.bond(_sig(address(escrow), other));
+        escrow.bond(0, _sig(address(escrow), other));
     }
 
     function testBondNativeAfterFirstExecutorStillActive() public {
@@ -265,7 +287,7 @@ contract EscrowNativeTest is Test {
 
         vm.prank(other);
         vm.expectRevert(EscrowBase.ExecutorAlreadyBonded.selector);
-        escrow.bond(_sig(address(escrow), other));
+        escrow.bond(0, _sig(address(escrow), other));
 
         assertEq(escrow.bondedExecutor(), executor);
     }
@@ -343,7 +365,7 @@ contract EscrowNativeTest is Test {
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.NotFunded.selector);
-        escrow.bond(_sig(address(escrow), executor));
+        escrow.bond(0, _sig(address(escrow), executor));
     }
 
     function testCancelAndWithdrawNativeAlreadyCancelled() public {

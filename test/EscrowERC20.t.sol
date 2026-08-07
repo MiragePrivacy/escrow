@@ -88,7 +88,7 @@ contract EscrowERC20Test is Test {
 
     function _bondExecutor() internal {
         vm.prank(executor);
-        escrow.bond(_sig(address(escrow), executor));
+        escrow.bond(0, _sig(address(escrow), executor));
     }
 
     function testConstructor() public view {
@@ -163,6 +163,53 @@ contract EscrowERC20Test is Test {
         assertEq(executor.balance, executorBefore);
     }
 
+    function testBondAdvancesRewardTokens() public {
+        uint256 gasAdvance = REWARD_AMOUNT / 4;
+        uint256 executorBefore = token.balanceOf(executor);
+
+        vm.prank(executor);
+        escrow.bond(gasAdvance, BondAuth.sign(vm, enclave.privateKey, address(escrow), executor, gasAdvance));
+
+        assertEq(token.balanceOf(executor), executorBefore + gasAdvance);
+        assertEq(token.balanceOf(address(escrow)), PAYMENT_AMOUNT + REWARD_AMOUNT - gasAdvance);
+        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT - gasAdvance);
+        assertEq(escrow.originalRewardAmount(), REWARD_AMOUNT);
+        assertEq(escrow.remainingGasAdvance(), 0);
+        assertTrue(escrow.gasAdvanceClaimed());
+    }
+
+    function testBondRejectsAdvanceAboveHalfReward() public {
+        uint256 gasAdvance = REWARD_AMOUNT / 2 + 1;
+
+        vm.prank(executor);
+        vm.expectRevert(EscrowBase.GasAdvanceTooLarge.selector);
+        escrow.bond(gasAdvance, BondAuth.sign(vm, enclave.privateKey, address(escrow), executor, gasAdvance));
+    }
+
+    function testBondSignatureBindsGasAdvance() public {
+        uint256 signedAdvance = REWARD_AMOUNT / 4;
+
+        vm.prank(executor);
+        vm.expectRevert(EscrowBase.InvalidBondSignature.selector);
+        escrow.bond(signedAdvance + 1, BondAuth.sign(vm, enclave.privateKey, address(escrow), executor, signedAdvance));
+    }
+
+    function testExpiredBondCannotClaimSecondAdvance() public {
+        uint256 gasAdvance = REWARD_AMOUNT / 4;
+        vm.prank(executor);
+        escrow.bond(gasAdvance, BondAuth.sign(vm, enclave.privateKey, address(escrow), executor, gasAdvance));
+
+        vm.warp(block.timestamp + 6 minutes);
+        vm.prank(other);
+        vm.expectRevert(EscrowBase.GasAdvanceAlreadyClaimed.selector);
+        escrow.bond(1, BondAuth.sign(vm, enclave.privateKey, address(escrow), other, 1));
+
+        vm.prank(other);
+        escrow.bond(0, _sig(address(escrow), other));
+        assertEq(escrow.bondedExecutor(), other);
+        assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT - gasAdvance);
+    }
+
     function testBondInvalidSignature() public {
         // Signature from a non-enclave key does not recover to blindedSigner.
         Vm.Wallet memory attacker = vm.createWallet("attacker");
@@ -170,7 +217,7 @@ contract EscrowERC20Test is Test {
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.InvalidBondSignature.selector);
-        escrow.bond(badSig);
+        escrow.bond(0, badSig);
     }
 
     function testBondSignatureBoundToCaller() public {
@@ -179,14 +226,14 @@ contract EscrowERC20Test is Test {
 
         vm.prank(other);
         vm.expectRevert(EscrowBase.InvalidBondSignature.selector);
-        escrow.bond(sigForExecutor);
+        escrow.bond(0, sigForExecutor);
     }
 
     function testBondNotFunded() public {
         EscrowERC20 unfunded = _newUnfunded();
         vm.prank(executor);
         vm.expectRevert(EscrowBase.NotFunded.selector);
-        unfunded.bond(_sig(address(unfunded), executor));
+        unfunded.bond(0, _sig(address(unfunded), executor));
     }
 
     function testBondCancellationRequested() public {
@@ -195,7 +242,7 @@ contract EscrowERC20Test is Test {
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.CancellationRequested.selector);
-        escrow.bond(_sig(address(escrow), executor));
+        escrow.bond(0, _sig(address(escrow), executor));
     }
 
     // An expired reservation frees the lock for a fresh enclave-authorized EOA.
@@ -206,7 +253,7 @@ contract EscrowERC20Test is Test {
 
         uint256 otherBefore = other.balance;
         vm.prank(other);
-        escrow.bond(_sig(address(escrow), other));
+        escrow.bond(0, _sig(address(escrow), other));
 
         assertEq(escrow.bondedExecutor(), other);
         assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT);
@@ -304,7 +351,7 @@ contract EscrowERC20Test is Test {
         _bondExecutor();
         vm.prank(other);
         vm.expectRevert(EscrowBase.ExecutorAlreadyBonded.selector);
-        escrow.bond(_sig(address(escrow), other));
+        escrow.bond(0, _sig(address(escrow), other));
     }
 
     function testBondAfterFirstExecutorStillActive() public {
@@ -315,7 +362,7 @@ contract EscrowERC20Test is Test {
 
         vm.prank(other);
         vm.expectRevert(EscrowBase.ExecutorAlreadyBonded.selector);
-        escrow.bond(_sig(address(escrow), other));
+        escrow.bond(0, _sig(address(escrow), other));
 
         assertEq(escrow.bondedExecutor(), executor);
     }
@@ -356,7 +403,7 @@ contract EscrowERC20Test is Test {
         escrow.cancelAndWithdraw();
     }
 
-    // After a reservation expires, the complete token balance remains refundable.
+    // After a zero-advance reservation expires, the complete token balance remains refundable.
     function testCancelAndWithdrawAfterBondExpired() public {
         _bondExecutor();
         vm.warp(block.timestamp + 6 minutes);
@@ -379,7 +426,21 @@ contract EscrowERC20Test is Test {
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.NotFunded.selector);
-        escrow.bond(_sig(address(escrow), executor));
+        escrow.bond(0, _sig(address(escrow), executor));
+    }
+
+    function testCancelAfterAdvanceReturnsOnlyRemainingReward() public {
+        uint256 gasAdvance = REWARD_AMOUNT / 4;
+        vm.prank(executor);
+        escrow.bond(gasAdvance, BondAuth.sign(vm, enclave.privateKey, address(escrow), executor, gasAdvance));
+        vm.warp(block.timestamp + 6 minutes);
+
+        uint256 deployerBefore = token.balanceOf(deployer);
+        vm.prank(deployer);
+        escrow.cancelAndWithdraw();
+
+        assertEq(token.balanceOf(deployer), deployerBefore + PAYMENT_AMOUNT + REWARD_AMOUNT - gasAdvance);
+        assertEq(token.balanceOf(executor), gasAdvance);
     }
 
     function testCancelAndWithdrawAlreadyCancelled() public {

@@ -124,7 +124,7 @@ contract USDTCompatibilityTest is Test {
         indexes[0] = 0;
         bytes memory signature = BatchBondAuth.sign(vm, BATCH_SIGNER_KEY, address(escrow), bidder, indexes);
         vm.prank(bidder);
-        escrow.bid(indexes, signature);
+        escrow.bid(indexes, 0, signature);
 
         assertEq(token.balanceOf(address(escrow)), escrowAmount);
 

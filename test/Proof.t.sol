@@ -84,7 +84,7 @@ contract EscrowMPTTest is Test {
 
         // Bond as executor, gated by the enclave's BondAuth signature
         vm.prank(proofExecutor);
-        proofEscrow.bond(BondAuth.sign(vm, enclave.privateKey, address(proofEscrow), proofExecutor));
+        proofEscrow.bond(0, BondAuth.sign(vm, enclave.privateKey, address(proofEscrow), proofExecutor));
 
         vm.roll(TARGET_BLOCK_NUMBER + 10);
         vm.setBlockhash(TARGET_BLOCK_NUMBER, TARGET_BLOCK_HASH);
@@ -139,7 +139,7 @@ contract EscrowMPTTest is Test {
         address executor = makeAddr("executor");
         vm.deal(executor, 1 ether);
         vm.prank(executor);
-        proofEscrow.bond(BondAuth.sign(vm, enclave.privateKey, address(proofEscrow), executor));
+        proofEscrow.bond(0, BondAuth.sign(vm, enclave.privateKey, address(proofEscrow), executor));
 
         vm.roll(targetBlockNumber + 10);
         vm.setBlockhash(targetBlockNumber, targetBlockHash);

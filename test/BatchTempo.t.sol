@@ -82,7 +82,7 @@ contract BatchTempoTest is Test {
 
         bytes memory bidSignature = BatchBondAuth.sign(vm, BLINDED_SIGNER_KEY, address(escrow), BIDDER, bidIndexes);
         vm.prank(BIDDER);
-        escrow.bid(bidIndexes, bidSignature);
+        escrow.bid(bidIndexes, 0, bidSignature);
 
         vm.roll(BLOCK_NUMBER + 10);
         vm.setBlockhash(BLOCK_NUMBER, keccak256(BLOCK_HEADER));
