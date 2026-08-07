@@ -51,7 +51,13 @@ contract EscrowNative is EscrowBase {
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
         currentPaymentAmount = expectedAmount;
+        gasAdvanceClaimed = false;
         funded = true;
+    }
+
+    function _releaseGasAdvance(address executor, uint256 gasAdvance) internal override {
+        (bool success,) = executor.call{value: gasAdvance}("");
+        if (!success) revert GasAdvanceTransferFailed();
     }
 
     // Validates a native ETH transfer by proving both transaction inclusion (for to/value)

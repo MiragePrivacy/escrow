@@ -52,8 +52,13 @@ contract EscrowERC20 is EscrowBase {
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
         currentPaymentAmount = expectedAmount;
+        gasAdvanceClaimed = false;
         IERC20(tokenContract).safeTransferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount);
         funded = true;
+    }
+
+    function _releaseGasAdvance(address executor, uint256 gasAdvance) internal override {
+        IERC20(tokenContract).safeTransfer(executor, gasAdvance);
     }
 
     // Validates a Transfer-event proof against a recent block hash and checks the Transfer

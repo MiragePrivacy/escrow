@@ -5,6 +5,7 @@ import "./BlockHeaderParser.sol";
 import "./MPTVerifier.sol";
 import "./ReceiptValidator.sol";
 import "./utils/ECDSA.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 abstract contract EscrowBase {
     // Custom errors
@@ -22,6 +23,9 @@ abstract contract EscrowBase {
     error InvalidBondSignature();
     error ZeroBlindedSigner();
     error ProofBeforeBond();
+    error GasAdvanceAlreadyClaimed();
+    error GasAdvanceTooLarge();
+    error GasAdvanceTransferFailed();
 
     // EIP-712 typed-data constants. The domain MUST match the off-chain signer
     // (nomad `crates/types/src/contracts.rs`) byte-for-byte, otherwise the recovered
@@ -30,9 +34,13 @@ abstract contract EscrowBase {
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     // BondAuth binds the enclave's authorization to the specific fresh EOA that bonds,
     // so a signature cannot be replayed to bond a different executor.
-    bytes32 private constant _BOND_TYPEHASH = keccak256("BondAuth(address bondingExecutor)");
+    bytes32 private constant _BOND_TYPEHASH = keccak256("BondAuth(address bondingExecutor,uint256 gasAdvance)");
     bytes32 private constant _NAME_HASH = keccak256("MirageEscrow");
     bytes32 private constant _VERSION_HASH = keccak256("1");
+    uint256 private constant _BPS_DENOMINATOR = 10_000;
+
+    /// @notice Maximum share of the original reward that can bootstrap a fresh EOA.
+    uint256 public constant MAX_GAS_ADVANCE_BPS = 5_000;
 
     // Cached EIP-712 domain separator, bound to this contract + chain at deploy.
     bytes32 private immutable _domainSeparator;
@@ -58,6 +66,8 @@ abstract contract EscrowBase {
     address public bondedExecutor;
     uint256 public executionDeadline;
     uint256 public bondStartBlock;
+    /// @notice Whether this funding cycle has already advanced reward funds.
+    bool public gasAdvanceClaimed;
     bool public cancellationRequest;
     bool public funded; // marks if the contract has funds to pay out the executors (if unfunded, no executor is accepted)
 
@@ -78,15 +88,19 @@ abstract contract EscrowBase {
         return _domainSeparator;
     }
 
-    // EIP-712 digest for a BondAuth authorizing bondingExecutor to bond this escrow.
-    function _hashBondAuth(address bondingExecutor) internal view returns (bytes32) {
-        bytes32 structHash = keccak256(abi.encode(_BOND_TYPEHASH, bondingExecutor));
+    // EIP-712 digest for a BondAuth authorizing the executor and exact advance.
+    function _hashBondAuth(address bondingExecutor, uint256 gasAdvance) internal view returns (bytes32) {
+        bytes32 structHash = keccak256(abi.encode(_BOND_TYPEHASH, bondingExecutor, gasAdvance));
         return keccak256(abi.encodePacked("\x19\x01", _domainSeparator, structHash));
     }
 
-    // Recovers the signer of a BondAuth authorizing bondingExecutor.
-    function _recoverBondSigner(address bondingExecutor, bytes calldata sig) internal view returns (address) {
-        return ECDSA.recover(_hashBondAuth(bondingExecutor), sig);
+    // Recovers the signer of a BondAuth authorizing the executor and advance.
+    function _recoverBondSigner(address bondingExecutor, uint256 gasAdvance, bytes calldata sig)
+        internal
+        view
+        returns (address)
+    {
+        return ECDSA.recover(_hashBondAuth(bondingExecutor, gasAdvance), sig);
     }
 
     // only deployer can call this. will set the cancellation request to true.
@@ -142,11 +156,13 @@ abstract contract EscrowBase {
     // Internal helper to validate bond requirements. The entry check is the ECDH gate:
     // the enclave's BondAuth signature must recover to this escrow's blindedSigner. There
     // is no node deposit; Nomad provisions executor gas outside the escrow.
-    function _validateBond(bytes calldata bondSig) internal view {
+    function _validateBond(uint256 gasAdvance, bytes calldata bondSig) internal view {
         if (!funded) revert NotFunded();
         if (cancellationRequest) revert CancellationRequested();
         if (is_bonded()) revert ExecutorAlreadyBonded();
-        if (_recoverBondSigner(msg.sender, bondSig) != blindedSigner) revert InvalidBondSignature();
+        if (gasAdvance > 0 && gasAdvanceClaimed) revert GasAdvanceAlreadyClaimed();
+        if (gasAdvance > remainingGasAdvance()) revert GasAdvanceTooLarge();
+        if (_recoverBondSigner(msg.sender, gasAdvance, bondSig) != blindedSigner) revert InvalidBondSignature();
     }
 
     // Internal helper to set bond data. bondedExecutor is the fresh EOA that produced a
@@ -157,17 +173,33 @@ abstract contract EscrowBase {
         bondStartBlock = block.number;
     }
 
-    // Locks the escrow to the calling EOA for five minutes. Gated by the ECDH signature:
-    // bondSig must recover to blindedSigner. Gas provisioning happens through Nomad's
-    // inventory and builder flow, so the sender does not deposit an execution-gas pot.
-    function bond(bytes calldata bondSig) external {
+    /// @notice Remaining one-time advance available from the existing reward.
+    function remainingGasAdvance() public view returns (uint256) {
+        if (gasAdvanceClaimed) return 0;
+        return Math.mulDiv(originalRewardAmount, MAX_GAS_ADVANCE_BPS, _BPS_DENOMINATOR);
+    }
+
+    // Locks the escrow to the calling EOA for five minutes and optionally releases
+    // a capped part of the existing reward. Titan fronts the bundle; the EOA swaps
+    // this advance when necessary, repays the builder, and retains collect() gas.
+    // No separate ETH bond pot is funded by the sender.
+    function bond(uint256 gasAdvance, bytes calldata bondSig) external {
         // A prior expired bond frees the lock for this fresh enclave.
         _clearExpiredBond();
 
-        _validateBond(bondSig);
+        _validateBond(gasAdvance, bondSig);
 
         _setBondData();
+
+        if (gasAdvance > 0) {
+            gasAdvanceClaimed = true;
+            currentRewardAmount -= gasAdvance;
+            _releaseGasAdvance(msg.sender, gasAdvance);
+        }
     }
+
+    /// Transfers an advance in this single escrow's reward asset.
+    function _releaseGasAdvance(address executor, uint256 gasAdvance) internal virtual;
 
     // Internal helper to clear payout state
     function _clearPayoutState() internal {
@@ -190,9 +222,10 @@ abstract contract EscrowBase {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
     }
 
-    // Internal helper to calculate withdrawable amount and clear state
+    // An advance has already left the escrow, so cancellation returns only the
+    // remaining reward. originalRewardAmount remains an immutable-cycle audit value.
     function _calculateWithdrawableAmount() internal view returns (uint256) {
-        return currentPaymentAmount + originalRewardAmount;
+        return currentPaymentAmount + currentRewardAmount;
     }
 
     // Internal helper to clear state after withdraw

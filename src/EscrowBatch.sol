@@ -95,13 +95,14 @@ contract EscrowBatch {
     error InvalidTransferIndex();
     error TransferStateConflict();
     error Reentrancy();
+    error GasAdvanceTooLarge();
 
     // ============ Storage ============
 
     bytes32 private constant _DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 private constant _BOND_TYPEHASH =
-        keccak256("BatchBondAuth(address bondingExecutor,uint256[] transferIndexes)");
+        keccak256("BatchBondAuth(address bondingExecutor,uint256[] transferIndexes,uint256 gasAdvance)");
     bytes32 private constant _NAME_HASH = keccak256("MirageEscrow");
     bytes32 private constant _VERSION_HASH = keccak256("1");
     bytes32 private immutable _domainSeparator;
@@ -117,11 +118,14 @@ contract EscrowBatch {
     uint256 public originalRewardAmount;
     uint256 public completedTransferCount;
     uint256 public activeBidCount;
+    uint256 public totalGasAdvanced;
 
     uint256 public constant MAX_BLOCK_LOOKBACK = 256;
     uint256 public constant BID_DURATION = 5 minutes;
     uint256 public constant MAX_ROWS = 256;
     uint256 public constant MAX_BLINDED_SIGNERS = 256;
+    uint256 public constant MAX_GAS_ADVANCE_BPS = 5_000;
+    uint256 private constant BPS_DENOMINATOR = 10_000;
     uint256 private constant NOT_ENTERED = 1;
     uint256 private constant ENTERED = 2;
 
@@ -253,6 +257,16 @@ contract EscrowBatch {
         return bidTransferIndexes[bidder][position];
     }
 
+    /// @notice Reward funds still available to bootstrap future bidders.
+    /// The limit applies across the entire escrow, not independently per bid.
+    function remainingGasAdvance() public view returns (uint256) {
+        uint256 maximumTotalAdvance = Math.mulDiv(originalRewardAmount, MAX_GAS_ADVANCE_BPS, BPS_DENOMINATOR);
+        if (totalGasAdvanced >= maximumTotalAdvance) return 0;
+
+        uint256 allowance = maximumTotalAdvance - totalGasAdvanced;
+        return Math.min(allowance, currentRewardAmount);
+    }
+
     /// @notice Whether at least one bid is still inside its execution window.
     function is_bonded() public view returns (bool) {
         for (uint256 i = 0; i < bidders.length;) {
@@ -338,11 +352,15 @@ contract EscrowBatch {
     /// @notice Place a free bid on a subset of expected transfers.
     /// @dev The signature binds this escrow, chain, bidder, and exact row indexes.
     /// Its recovered blinded signer must be constructor-approved and unused.
-    function bid(uint256[] calldata transferIndexes, bytes calldata bidSignature) external nonReentrant {
+    function bid(uint256[] calldata transferIndexes, uint256 gasAdvance, bytes calldata bidSignature)
+        external
+        nonReentrant
+    {
         _handleExpiredBids();
         _validateBidRequirements(transferIndexes);
+        if (gasAdvance > remainingGasAdvance()) revert GasAdvanceTooLarge();
 
-        address signer = ECDSA.recover(_hashBidAuthorization(msg.sender, transferIndexes), bidSignature);
+        address signer = ECDSA.recover(_hashBidAuthorization(msg.sender, transferIndexes, gasAdvance), bidSignature);
         if (!isBlindedSigner[signer]) revert InvalidBidSignature();
         if (blindedSignerUsed[signer]) revert BlindedSignerAlreadyUsed();
 
@@ -365,6 +383,12 @@ contract EscrowBatch {
             unchecked {
                 ++i;
             }
+        }
+
+        if (gasAdvance > 0) {
+            totalGasAdvanced += gasAdvance;
+            currentRewardAmount -= gasAdvance;
+            _sendAsset(rewardAsset, msg.sender, gasAdvance);
         }
     }
 
@@ -467,13 +491,14 @@ contract EscrowBatch {
 
     // ============ Internal: bid authorization ============
 
-    function _hashBidAuthorization(address bondingExecutor, uint256[] calldata transferIndexes)
+    function _hashBidAuthorization(address bondingExecutor, uint256[] calldata transferIndexes, uint256 gasAdvance)
         internal
         view
         returns (bytes32)
     {
-        bytes32 structHash =
-            keccak256(abi.encode(_BOND_TYPEHASH, bondingExecutor, keccak256(abi.encodePacked(transferIndexes))));
+        bytes32 structHash = keccak256(
+            abi.encode(_BOND_TYPEHASH, bondingExecutor, keccak256(abi.encodePacked(transferIndexes)), gasAdvance)
+        );
         return keccak256(abi.encodePacked("\x19\x01", _domainSeparator, structHash));
     }
 
@@ -495,6 +520,7 @@ contract EscrowBatch {
         currentTransferAmount = totalTransferAmount;
         currentValueWeight = totalValueWeight;
         completedTransferCount = 0;
+        totalGasAdvanced = 0;
         hasBeenFunded = true;
         funded = true;
 
