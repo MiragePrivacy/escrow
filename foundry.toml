@@ -6,5 +6,11 @@ via_ir = true
 optimizer = true
 optimizer_runs = 200
 extra_output = ["evm.legacyAssembly", "storageLayout"]
+# StatementHash.t.sol differential-tests the spec 10.2 encoder against the Rust
+# reference vectors.
+# Vendored circuit outputs: the reference vectors and a real proof. Copied from
+# the circuits repository because Foundry cannot read outside its project root.
+# See test/fixtures/README.md for how to regenerate them.
+fs_permissions = [{ access = "read", path = "./test/fixtures" }]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

@@ -60,6 +60,12 @@ contract USDTCompatibilityTest is Test {
 
     uint256 private constant PAYMENT_AMOUNT = 100e6;
     uint256 private constant REWARD_AMOUNT = 10e6;
+
+    // Settlement details are hidden behind the commitment; these tests exercise
+    // token transfer behaviour, so any non-zero digest serves.
+    bytes32 private constant COMMITMENT = keccak256("intent commitment");
+    bytes32 private constant INSTANCE_DOMAIN = keccak256("instance domain");
+    bytes32 private constant REQUEST_ID = keccak256("request id");
     uint256 private constant BATCH_SIGNER_KEY = 8_008;
 
     function setUp() public {
@@ -78,7 +84,9 @@ contract USDTCompatibilityTest is Test {
         vm.startPrank(deployer);
         address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow, escrowAmount);
-        EscrowERC20 escrow = new EscrowERC20(address(token), recipient, PAYMENT_AMOUNT, blindedSigner, REWARD_AMOUNT, 0);
+        EscrowERC20 escrow = new EscrowERC20(
+            address(token), PAYMENT_AMOUNT, COMMITMENT, INSTANCE_DOMAIN, REQUEST_ID, blindedSigner, REWARD_AMOUNT, 0
+        );
         vm.stopPrank();
 
         assertTrue(escrow.funded());
@@ -98,7 +106,16 @@ contract USDTCompatibilityTest is Test {
 
         vm.startPrank(deployer);
         vm.expectRevert(abi.encodeWithSelector(SafeERC20.SafeERC20FailedOperation.selector, address(falseReturnToken)));
-        new EscrowERC20(address(falseReturnToken), recipient, PAYMENT_AMOUNT, blindedSigner, REWARD_AMOUNT, 0);
+        new EscrowERC20(
+            address(falseReturnToken),
+            PAYMENT_AMOUNT,
+            COMMITMENT,
+            INSTANCE_DOMAIN,
+            REQUEST_ID,
+            blindedSigner,
+            REWARD_AMOUNT,
+            0
+        );
         vm.stopPrank();
     }
 
