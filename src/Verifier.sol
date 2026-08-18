@@ -3,22 +3,6 @@
 
 pragma solidity ^0.8.0;
 
-// GENERATED FILE - DO NOT EDIT.
-//
-// Emitted by the circuits repository's
-// `cargo run -p mirage-prover --release --bin export-verifier`, which renders
-// this template around the verifying key for its ERC-20 exact-block relation.
-// Regenerate rather than patch: the embedded key must match the proving key the
-// enclave uses, and a hand-edit desynchronises them with no symptom beyond
-// rejected proofs. See test/fixtures/README.md.
-//
-// Measured in the circuits repo's `test/VerifierTest.sol`: 4,858 bytes
-// deployed, 222,707 gas per verification, no storage access.
-//
-// Spec 15.1 requires each escrow embed this rather than call a shared
-// deployment, so escrows have no contract in common. It is inherited by
-// EscrowERC20, not deployed separately.
-
 /// @title Groth16 verifier template.
 /// @author Remco Bloemen
 /// @notice Supports verifying Groth16 proofs. Proofs can be in uncompressed
@@ -91,12 +75,12 @@ contract Verifier {
     uint256 constant DELTA_NEG_Y_1 = 19257957324113511611720790992651491173029981678335866461361133554601815821372;
 
     // Constant and public input points
-    uint256 constant CONSTANT_X = 11669626291981251635783520710925090668147056033829712640595068438256106975139;
-    uint256 constant CONSTANT_Y = 16347446044779109101862541107010497572844156831645941259641803340817828898121;
-    uint256 constant PUB_0_X = 11277216994731228467577533193737430761999627198482206601832200985170047304692;
-    uint256 constant PUB_0_Y = 19194617958282173385875101787907925580643429243256645791908923606507614350480;
-    uint256 constant PUB_1_X = 7917263083529794066487080910534932007106382572539072207425386221631024175829;
-    uint256 constant PUB_1_Y = 16063234215888709343691057972647167863795075289837595650401049843203258133971;
+    uint256 constant CONSTANT_X = 16208839724471277216601460661420983062276407618665006588326578935414763551635;
+    uint256 constant CONSTANT_Y = 9940980535099599717419533404020065535259107309790897410751122444250949482832;
+    uint256 constant PUB_0_X = 13140574417491532082542376956995810142852812141951714597942587116697734247084;
+    uint256 constant PUB_0_Y = 19437488196263352531732679871899443478925195370665642208888307033221185496979;
+    uint256 constant PUB_1_X = 12279282134251549331686514719497445837688998891797504738355585676440180297197;
+    uint256 constant PUB_1_Y = 1570097439651360812443069379342259804237432750561298171817028858121495635769;
 
     /// Negation in Fp.
     /// @notice Returns a number x such that a + x = 0 in Fp.
