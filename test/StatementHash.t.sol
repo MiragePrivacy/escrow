@@ -93,20 +93,48 @@ contract StatementHashTest is Test {
 
         StatementHash.Context memory m;
 
-        m = _base(); m.instanceDomain = bytes32(uint256(1)); _mustDiffer(m, want, "instanceDomain");
-        m = _base(); m.chainId += 1; _mustDiffer(m, want, "chainId");
-        m = _base(); m.escrow = address(1); _mustDiffer(m, want, "escrow");
-        m = _base(); m.requestId = bytes32(uint256(1)); _mustDiffer(m, want, "requestId");
-        m = _base(); m.rowIndex += 1; _mustDiffer(m, want, "rowIndex");
-        m = _base(); m.intentCommitment = bytes32(uint256(1)); _mustDiffer(m, want, "intentCommitment");
-        m = _base(); m.bondAttempt += 1; _mustDiffer(m, want, "bondAttempt");
-        m = _base(); m.bondStartBlock += 1; _mustDiffer(m, want, "bondStartBlock");
-        m = _base(); m.bondDeadline += 1; _mustDiffer(m, want, "bondDeadline");
-        m = _base(); m.bondedCollector = address(1); _mustDiffer(m, want, "bondedCollector");
-        m = _base(); m.rowPayoutAsset = address(1); _mustDiffer(m, want, "rowPayoutAsset");
-        m = _base(); m.rowPayoutAmount += 1; _mustDiffer(m, want, "rowPayoutAmount");
-        m = _base(); m.witnessBlockNumber += 1; _mustDiffer(m, want, "witnessBlockNumber");
-        m = _base(); m.witnessBlockHash = bytes32(uint256(1)); _mustDiffer(m, want, "witnessBlockHash");
+        m = _base();
+        m.instanceDomain = bytes32(uint256(1));
+        _mustDiffer(m, want, "instanceDomain");
+        m = _base();
+        m.chainId += 1;
+        _mustDiffer(m, want, "chainId");
+        m = _base();
+        m.escrow = address(1);
+        _mustDiffer(m, want, "escrow");
+        m = _base();
+        m.requestId = bytes32(uint256(1));
+        _mustDiffer(m, want, "requestId");
+        m = _base();
+        m.rowIndex += 1;
+        _mustDiffer(m, want, "rowIndex");
+        m = _base();
+        m.intentCommitment = bytes32(uint256(1));
+        _mustDiffer(m, want, "intentCommitment");
+        m = _base();
+        m.bondAttempt += 1;
+        _mustDiffer(m, want, "bondAttempt");
+        m = _base();
+        m.bondStartBlock += 1;
+        _mustDiffer(m, want, "bondStartBlock");
+        m = _base();
+        m.bondDeadline += 1;
+        _mustDiffer(m, want, "bondDeadline");
+        m = _base();
+        m.bondedCollector = address(1);
+        _mustDiffer(m, want, "bondedCollector");
+        m = _base();
+        m.rowPayoutAsset = address(1);
+        _mustDiffer(m, want, "rowPayoutAsset");
+        m = _base();
+        m.rowPayoutAmount += 1;
+        _mustDiffer(m, want, "rowPayoutAmount");
+        m = _base();
+        m.witnessBlockNumber += 1;
+        _mustDiffer(m, want, "witnessBlockNumber");
+        m = _base();
+        m.witnessBlockHash = bytes32(uint256(1));
+        _mustDiffer(m, want, "witnessBlockHash");
 
         // The base must be unchanged: if any case above had aliased it, this
         // fails and the 14 assertions were checking corrupted inputs.
