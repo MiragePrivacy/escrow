@@ -197,21 +197,17 @@ contract EscrowZKTest is Test {
         // reward + payment. The two must therefore sum to the fixture's value,
         // not each equal it.
         uint256 reward = payoutAmount / 4;
-        vm.store(address(escrow), bytes32(uint256(0)), bytes32(reward));                  // currentRewardAmount
-        vm.store(address(escrow), bytes32(uint256(1)), bytes32(payoutAmount - reward));   // currentPaymentAmount
-        vm.store(address(escrow), bytes32(uint256(2)), bytes32(reward));                  // originalRewardAmount
+        vm.store(address(escrow), bytes32(uint256(0)), bytes32(reward)); // currentRewardAmount
+        vm.store(address(escrow), bytes32(uint256(1)), bytes32(payoutAmount - reward)); // currentPaymentAmount
+        vm.store(address(escrow), bytes32(uint256(2)), bytes32(reward)); // originalRewardAmount
         vm.store(address(escrow), bytes32(uint256(3)), bytes32(uint256(uint160(collector)))); // bondedExecutor
-        vm.store(address(escrow), bytes32(uint256(4)), bytes32(uint256(bondDeadline)));   // executionDeadline
+        vm.store(address(escrow), bytes32(uint256(4)), bytes32(uint256(bondDeadline))); // executionDeadline
         vm.store(address(escrow), bytes32(uint256(5)), bytes32(uint256(bondStartBlock))); // bondStartBlock
 
         // Slot 6 packs bondAttempt at offset 0 (4 bytes), then gasAdvanceClaimed,
         // cancellationRequest and funded at byte offsets 4, 5 and 6. Setting
         // funded means bit 48, per `forge inspect EscrowERC20 storageLayout`.
-        vm.store(
-            address(escrow),
-            bytes32(uint256(6)),
-            bytes32(uint256(bondAttempt) | (uint256(1) << 48))
-        );
+        vm.store(address(escrow), bytes32(uint256(6)), bytes32(uint256(bondAttempt) | (uint256(1) << 48)));
 
         vm.mockCall(payoutAsset, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
     }

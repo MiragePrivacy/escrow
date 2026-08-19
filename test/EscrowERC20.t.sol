@@ -130,8 +130,7 @@ contract EscrowERC20Test is Test {
         address futureEscrow2 = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow2, REWARD_AMOUNT + PAYMENT_AMOUNT);
 
-        EscrowERC20 escrow2 =
-            new EscrowERC20(
+        EscrowERC20 escrow2 = new EscrowERC20(
             address(token), PAYMENT_AMOUNT, COMMITMENT, INSTANCE_DOMAIN, REQUEST_ID, enclave.addr, 0, GAS_ADVANCE_BUDGET
         );
 
