@@ -36,3 +36,4 @@ echo "Updating bytecode artifacts:"
 extract EscrowERC20  erc20
 extract EscrowNative native
 extract EscrowBatch  batch
+extract EscrowNativeZK native_zk
