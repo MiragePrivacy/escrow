@@ -1,10 +1,10 @@
 {
   "proof": [
-    "0x284d0ca267a6bcdec14f26b25dfefef12cdbff8037b01ddf5fadb4151f50afef", "0x2287ddd069fe92f847eb4a6a67d195a71bcf3fe62954d69101c4bb8829ebd743",
-    "0x1c971d655685d85217ebb32974eefa561bc9d5d833ccd43499157fe898abf95b", "0x1f08f74d689ba70827301e355613a2919e91f35afaf904a24a04aad8e6df07c4", "0x065e219d3a630fe908520b14ef2f15a8353dda97586bcafaf0fe3d4b81972791", "0x2bf5690f0e9cff95de8a7468ff6026d72b85877446c58330b31c67eb94a497a1",
-    "0x245129a75240bcd5621438310e91a169a397576b4072d7198df3d23713987f47", "0x2610b905d8e5c59b04ff012274231d2d12aa477d17124053a1f53c9f03f72f18"
+    "0x2ae5b09b408d8d564a48df9cfb4e3a55bce45abaa2a0c939a0bfd18a5718a807", "0x1dc2874e7429b6f41cfb51ceb3a6fe32d615e1988fa407ed1a0c5f2b8022c047",
+    "0x2f5864201023dfc99ad652e93c653d2e190ce8a9709c1e57880e487ebd903dd6", "0x189007e3f60ce2e65c8e085bbbee05c8eb080027e23bab8c4771abbb363d6873", "0x016233173aae2cb9843c5e75fe382a3f4319e9a5995bbef365a3fa73f3aa775d", "0x289e812f4cc2a5352fe0e01955ff121e91492df88bce52dda5507950671258ba",
+    "0x2ab4942e40110425225c677a41a5d7c3a17eb8ad6be5178dde91d6f6641c611b", "0x100bb92d6c63ce0f9088c3f1b2c217b2a28c0dce2526cc1dff6602c63b7a2c49"
   ],
-  "publicSignals": ["0xa2e1c2121f9af063923e7fecdcdab89e", "0xe82c46cd98b51c401ee16453967d0e0b"],
+  "publicSignals": ["0x092266ba8abfaa46c44008e2060f644e", "0xaed57f88f7d3b0a2e36fd07769591c33"],
   "statement": {
     "instanceDomain": "0x1111111111111111111111111111111111111111111111111111111111111111",
     "chainId": 1,
@@ -14,12 +14,12 @@
     "intentCommitment": "0x187e649a78731c2dd46dc0c66cd13b2d06c78b5a81825efe17d51f6194aa46be",
     "bondAttempt": 1,
     "bondStartBlock": 20999900,
-    "bondDeadline": 21000080,
+    "bondDeadline": 20999925,
     "bondedCollector": "0x5555555555555555555555555555555555555555",
     "rowPayoutAsset": "0x7777777777777777777777777777777777777777",
     "rowPayoutAmount": "0x000000000000000000000000000000000000000000000000000000003b9aca00",
-    "witnessBlockNumber": 21000000,
-    "witnessBlockHash": "0xac9ad31ae5b5ab30cb08b4bc58b5baaff1a1747be050eb2ebfc1dc36348f95ee"
+    "witnessBlockNumber": 20999910,
+    "witnessBlockHash": "0x1d05fb8842f7f9f879a82357bcc0ec8e51d4cfdfcef3458d6d7660622f31d00a"
   },
   "note": "proof is [a.x, a.y, b.x1, b.x0, b.y1, b.y0, c.x, c.y]; the EVM pairing precompile takes G2 coordinates in that order, which is the reverse of arkworks' serialization. The statement block is what the escrow must reproduce from its own state for this proof to verify against it."
 }
