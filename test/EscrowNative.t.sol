@@ -136,7 +136,7 @@ contract EscrowNativeTest is Test {
         _bondExecutor();
 
         assertEq(escrow.bondedExecutor(), executor);
-        assertEq(escrow.executionDeadline(), block.timestamp + 5 minutes);
+        assertEq(escrow.executionDeadline(), block.number + escrow.BOND_DURATION_BLOCKS());
         assertEq(escrow.bondStartBlock(), block.number);
         assertTrue(escrow.is_bonded());
         assertEq(address(escrow).balance, TOTAL);
@@ -208,7 +208,7 @@ contract EscrowNativeTest is Test {
     function testBondNativeAfterDeadlinePassed() public {
         _bondExecutor();
 
-        vm.warp(block.timestamp + 6 minutes);
+        vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
 
         uint256 otherBefore = other.balance;
         vm.prank(other);
@@ -267,7 +267,7 @@ contract EscrowNativeTest is Test {
 
     function testCollectNativeAfterDeadline() public {
         _bondExecutor();
-        vm.warp(block.timestamp + 6 minutes);
+        vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
         vm.prank(executor);
         vm.expectRevert(EscrowBase.OnlyBondedExecutor.selector);
         escrow.collect(_dummyProof(), block.number - 1);
@@ -277,7 +277,7 @@ contract EscrowNativeTest is Test {
         assertFalse(escrow.is_bonded());
         _bondExecutor();
         assertTrue(escrow.is_bonded());
-        vm.warp(block.timestamp + 6 minutes);
+        vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
         assertFalse(escrow.is_bonded());
     }
 
@@ -291,7 +291,7 @@ contract EscrowNativeTest is Test {
     function testBondNativeAfterFirstExecutorStillActive() public {
         _bondExecutor();
 
-        vm.warp(block.timestamp + 4 minutes);
+        vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() - 5);
         assertTrue(escrow.is_bonded());
 
         vm.prank(other);
@@ -355,7 +355,7 @@ contract EscrowNativeTest is Test {
     // After a reservation expires, the complete native balance remains refundable.
     function testCancelAndWithdrawNativeAfterBondExpired() public {
         _bondExecutor();
-        vm.warp(block.timestamp + 6 minutes);
+        vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
 
         uint256 initialBalance = deployer.balance;
 

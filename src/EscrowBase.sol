@@ -61,8 +61,21 @@ abstract contract EscrowBase {
 
     // The following variables are dynamically adjusted when a bond or cancellation request is submitted.
     address public bondedExecutor;
+    /// @notice Last block at which the bonded executor may collect.
+    ///
+    /// A block number rather than a timestamp. Spec 12.7 requires it: the
+    /// circuit reads the settlement block number from an authenticated header
+    /// and asserts `bondStartBlock < txBlockNumber <= bondDeadline`, and it
+    /// cannot compare an authenticated block number against a timestamp.
     uint256 public executionDeadline;
     uint256 public bondStartBlock;
+    /// @notice Bond attempts made against this escrow, starting at 1.
+    ///
+    /// A replay tag, spec 10.2. It enters the statement hash, so a proof
+    /// generated under one lease cannot be presented under a later one. Unlike
+    /// the rest of the bond state it survives expiry, which is what makes an
+    /// expired lease's proofs permanently unusable.
+    uint32 public bondAttempt;
     /// @notice Whether this funding cycle has already advanced reward funds.
     bool public gasAdvanceClaimed;
     bool public cancellationRequest;
@@ -115,9 +128,13 @@ abstract contract EscrowBase {
         cancellationRequest = false;
     }
 
+    /// @notice Blocks a bond stays live. ~5 minutes at 12s blocks, matching the
+    /// previous timestamp-based window.
+    uint256 public constant BOND_DURATION_BLOCKS = 25;
+
     // checks if contract is currently bonded by verifying deadline
     function is_bonded() public view returns (bool) {
-        return executionDeadline > 0 && block.timestamp <= executionDeadline;
+        return executionDeadline > 0 && block.number <= executionDeadline;
     }
 
     // Internal helper to validate block header for proof verification
@@ -136,6 +153,9 @@ abstract contract EscrowBase {
 
     // Internal helper to reset bond data when expired. An expired bond simply frees the
     // lock for the next enclave; there is no forfeited node deposit to roll into the reward.
+    //
+    // bondAttempt is deliberately preserved: clearing it would let a proof from
+    // an expired lease verify against the next one.
     function _tryResetBondData() internal {
         if (is_bonded()) revert BondActive();
 
@@ -146,7 +166,7 @@ abstract contract EscrowBase {
 
     // Internal helper to clear an expired bond so a fresh enclave can bond.
     function _clearExpiredBond() internal {
-        if (executionDeadline > 0 && block.timestamp > executionDeadline) {
+        if (executionDeadline > 0 && block.number > executionDeadline) {
             _tryResetBondData();
         }
     }
@@ -165,10 +185,14 @@ abstract contract EscrowBase {
 
     // Internal helper to set bond data. bondedExecutor is the fresh EOA that produced a
     // valid signature, not a depositor.
+    //
+    // bondAttempt increments here rather than resetting with the rest of the
+    // bond state, so each lease gets a distinct statement hash.
     function _setBondData() internal {
         bondedExecutor = msg.sender;
-        executionDeadline = block.timestamp + 5 minutes;
+        executionDeadline = block.number + BOND_DURATION_BLOCKS;
         bondStartBlock = block.number;
+        bondAttempt += 1;
     }
 
     /// @notice Remaining one-time advance available from the existing reward.
