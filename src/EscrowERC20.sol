@@ -56,7 +56,11 @@ contract EscrowERC20 is EscrowBase, Verifier {
     bytes32 public immutable instanceDomain;
 
     /// @notice Identifies the settlement request this escrow serves.
-    bytes32 public immutable requestId;
+    ///
+    /// Named `requestHash` rather than `requestId` so its selector carries no
+    /// leading zero byte: solc emits such a selector as a truncated PUSH, which
+    /// the bytecode obfuscator does not recognise as a dispatcher entry.
+    bytes32 public immutable requestHash;
 
     /// @notice Row index within the request. Always zero: this escrow is
     /// single-row, but the statement binds it because batch escrows are not.
@@ -97,7 +101,7 @@ contract EscrowERC20 is EscrowBase, Verifier {
         payoutAmount = _payoutAmount;
         intentCommitment = _intentCommitment;
         instanceDomain = _instanceDomain;
-        requestId = _requestId;
+        requestHash = _requestId;
 
         if (_currentRewardAmount > 0) {
             fund(_currentRewardAmount);
@@ -200,7 +204,7 @@ contract EscrowERC20 is EscrowBase, Verifier {
                 instanceDomain: instanceDomain,
                 chainId: block.chainid,
                 escrow: address(this),
-                requestId: requestId,
+                requestId: requestHash,
                 rowIndex: ROW_INDEX,
                 intentCommitment: intentCommitment,
                 bondAttempt: bondAttempt,
