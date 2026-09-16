@@ -18,7 +18,7 @@ import {NativeVerifier} from "./NativeVerifier.sol";
 ///
 /// @dev The verifier differs from the ERC-20 escrow's. Groth16's verifying key
 /// is derived from the constraint system, and the native relation is a separate
-/// circuit (~17.8M constraints against the ERC-20 path's ~10.4M), so a native
+/// circuit (11,620,286 constraints with batched Keccacheck), so a native
 /// proof does not verify against the ERC-20 key or vice versa. Spec 15.1
 /// requires the verifier be embedded rather than called, hence the inheritance.
 ///
