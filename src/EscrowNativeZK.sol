@@ -56,7 +56,7 @@ contract EscrowNativeZK is EscrowBase, NativeVerifier {
     bytes32 public immutable instanceDomain;
 
     /// @notice Identifies the settlement request this escrow serves.
-    bytes32 public immutable requestId;
+    bytes32 public immutable requestHash;
 
     /// @notice Row index within the request. Always zero: this escrow is
     /// single-row, but the statement binds it because batch escrows are not.
@@ -75,12 +75,12 @@ contract EscrowNativeZK is EscrowBase, NativeVerifier {
     /// Present so the statement this escrow builds matches the ERC-20 escrow's
     /// shape; spec 10.2 encodes the payout asset in every statement, and the
     /// zero address is how a native payout is written.
-    address public constant PAYOUT_ASSET = address(0);
+    address public constant payoutAsset = address(0);
 
     /// @param _payoutAmount Amount the collector is paid, public.
     /// @param _intentCommitment Spec 8.3 digest hiding the settlement details.
     /// @param _instanceDomain Per-deployment domain separator, spec 16.
-    /// @param _requestId Settlement request this escrow serves.
+    /// @param _requestHash Settlement request this escrow serves.
     ///
     /// `expectedRecipient` and `expectedAmount` in the base are set to zero:
     /// the settlement recipient and amount live in the commitment, and writing
@@ -89,7 +89,7 @@ contract EscrowNativeZK is EscrowBase, NativeVerifier {
         uint256 _payoutAmount,
         bytes32 _intentCommitment,
         bytes32 _instanceDomain,
-        bytes32 _requestId,
+        bytes32 _requestHash,
         address _blindedSigner,
         uint256 _currentRewardAmount,
         uint256 _maxGasAdvance
@@ -101,7 +101,7 @@ contract EscrowNativeZK is EscrowBase, NativeVerifier {
         payoutAmount = _payoutAmount;
         intentCommitment = _intentCommitment;
         instanceDomain = _instanceDomain;
-        requestId = _requestId;
+        requestHash = _requestHash;
 
         if (_currentRewardAmount > 0) {
             _validateGasAdvanceBudget(_currentRewardAmount);
@@ -199,14 +199,14 @@ contract EscrowNativeZK is EscrowBase, NativeVerifier {
                 instanceDomain: instanceDomain,
                 chainId: block.chainid,
                 escrow: address(this),
-                requestId: requestId,
+                requestId: requestHash,
                 rowIndex: ROW_INDEX,
                 intentCommitment: intentCommitment,
                 bondAttempt: bondAttempt,
                 bondStartBlock: uint64(bondStartBlock),
                 bondDeadline: uint64(executionDeadline),
                 bondedCollector: bondedExecutor,
-                rowPayoutAsset: PAYOUT_ASSET,
+                rowPayoutAsset: payoutAsset,
                 rowPayoutAmount: _calculatePayout(),
                 witnessBlockNumber: witnessBlockNumber,
                 witnessBlockHash: witnessBlockHash

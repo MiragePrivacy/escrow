@@ -78,7 +78,7 @@ contract EscrowNativeZKTest is Test {
     /// the circuit and the contract disagree about what is being settled.
     function test_FixtureIsANativePayout() public view {
         assertEq(payoutAsset, address(0), "fixture is not a native payout");
-        assertEq(escrow.PAYOUT_ASSET(), address(0), "escrow payout asset is not native");
+        assertEq(escrow.payoutAsset(), address(0), "escrow payout asset is not native");
     }
 
     /// The property the integration rests on: the escrow's own statement, built
