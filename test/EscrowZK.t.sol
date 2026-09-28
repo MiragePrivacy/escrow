@@ -95,6 +95,24 @@ contract EscrowZKTest is Test {
     }
 
     /// Gas for the ZK path, against 724,991 for the plaintext path.
+    function test_CollectsAtFifteenMinuteDeadline() public {
+        assertEq(escrow.BOND_DURATION_BLOCKS(), 75);
+        assertEq(bondDeadline - bondStartBlock, 75);
+        vm.roll(bondDeadline);
+        vm.setBlockhash(witnessBlockNumber, witnessBlockHash);
+        vm.prank(collector);
+        escrow.collect(proof, signals, witnessBlockNumber);
+        assertFalse(escrow.funded());
+    }
+
+    function test_RejectsCollectionAfterFifteenMinuteDeadline() public {
+        vm.roll(bondDeadline + 1);
+        vm.setBlockhash(witnessBlockNumber, witnessBlockHash);
+        vm.prank(collector);
+        vm.expectRevert(EscrowBase.OnlyBondedExecutor.selector);
+        escrow.collect(proof, signals, witnessBlockNumber);
+    }
+
     function test_ReportsCollectGas() public {
         vm.prank(collector);
         uint256 before = gasleft();
