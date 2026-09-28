@@ -106,9 +106,9 @@ contract EscrowNativeZKTest is Test {
     }
 
     /// Gas for the native ZK path.
-    function test_CollectsAtFifteenMinuteDeadline() public {
-        assertEq(escrow.BOND_DURATION_BLOCKS(), 75);
-        assertEq(bondDeadline - bondStartBlock, 75);
+    function test_CollectsAtTwentyMinuteDeadline() public {
+        assertEq(escrow.BOND_DURATION_BLOCKS(), 100);
+        assertEq(bondDeadline - bondStartBlock, 100);
         vm.roll(bondDeadline);
         vm.setBlockhash(witnessBlockNumber, witnessBlockHash);
         vm.prank(collector);
@@ -116,7 +116,7 @@ contract EscrowNativeZKTest is Test {
         assertFalse(escrow.funded());
     }
 
-    function test_RejectsCollectionAfterFifteenMinuteDeadline() public {
+    function test_RejectsCollectionAfterTwentyMinuteDeadline() public {
         vm.roll(bondDeadline + 1);
         vm.setBlockhash(witnessBlockNumber, witnessBlockHash);
         vm.prank(collector);
