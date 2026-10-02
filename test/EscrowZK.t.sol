@@ -95,9 +95,9 @@ contract EscrowZKTest is Test {
     }
 
     /// Gas for the ZK path, against 724,991 for the plaintext path.
-    function test_CollectsAtTwentyMinuteDeadline() public {
-        assertEq(escrow.BOND_DURATION_BLOCKS(), 100);
-        assertEq(bondDeadline - bondStartBlock, 100);
+    function test_CollectsAtFifteenMinuteDeadline() public {
+        assertEq(escrow.BOND_DURATION_BLOCKS(), 75);
+        assertEq(bondDeadline - bondStartBlock, 75);
         vm.roll(bondDeadline);
         vm.setBlockhash(witnessBlockNumber, witnessBlockHash);
         vm.prank(collector);
@@ -105,7 +105,7 @@ contract EscrowZKTest is Test {
         assertFalse(escrow.funded());
     }
 
-    function test_RejectsCollectionAfterTwentyMinuteDeadline() public {
+    function test_RejectsCollectionAfterFifteenMinuteDeadline() public {
         vm.roll(bondDeadline + 1);
         vm.setBlockhash(witnessBlockNumber, witnessBlockHash);
         vm.prank(collector);
