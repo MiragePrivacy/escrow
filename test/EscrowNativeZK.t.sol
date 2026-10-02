@@ -2,27 +2,27 @@
 pragma solidity 0.8.30;
 
 import {Test} from "forge-std/Test.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {EscrowERC20} from "../src/EscrowERC20.sol";
+import {EscrowNativeZK} from "../src/EscrowNativeZK.sol";
 import {EscrowBase} from "../src/EscrowBase.sol";
 
-/// @title End-to-end collection against a real Groth16 proof
-/// @notice The test that would catch a broken swap. Everything else in the
-/// suite exercises guard clauses that run before the proof logic, so they keep
-/// passing whatever `collect` does internally.
+/// @title End-to-end native collection against a real Groth16 proof
+/// @notice The native counterpart to `EscrowZKTest`, and the test that would
+/// catch a wrong verifier. Every other guard in this contract runs before the
+/// proof logic, so they keep passing whatever `collect` does internally.
 ///
-/// The proof comes from `test/fixtures/proof.json`, vendored from the circuits
-/// repository and produced by its `export-verifier` binary. Its statement
-/// block records the context the circuit committed to; the escrow must
-/// reproduce that context byte for byte from its own storage or the proof will
-/// not verify against it.
+/// The proof comes from `test/fixtures/native_proof.json`, vendored from the
+/// circuits repository and produced by its `export-native-verifier` binary. It
+/// is a proof of the *native* relation, so it verifies only against
+/// `NativeVerifier` -- swapping in the ERC-20 verifier fails here, which is the
+/// property that makes the two escrows genuinely separate rather than a naming
+/// difference.
 ///
-/// Reproducing it takes cheatcodes: the escrow has to live at the fixture's
-/// address, hold its bond state, and see its witness block hash. That is the
-/// point — it demonstrates the escrow's computed statement and the circuit's
-/// agree, which is the single property the integration depends on.
-contract EscrowZKTest is Test {
-    EscrowERC20 internal escrow;
+/// Reproducing the committed statement takes cheatcodes: the escrow has to live
+/// at the fixture's address, hold its bond state, and see its witness block
+/// hash. The escrow is also funded in ETH rather than through a mocked token,
+/// since a native payout moves real balance.
+contract EscrowNativeZKTest is Test {
+    EscrowNativeZK internal escrow;
 
     uint256[8] internal proof;
     uint256[2] internal signals;
@@ -42,7 +42,7 @@ contract EscrowZKTest is Test {
     uint256 internal payoutAmount;
 
     function setUp() public {
-        string memory json = vm.readFile("test/fixtures/proof.json");
+        string memory json = vm.readFile("test/fixtures/native_proof.json");
 
         // The statement binds chainId, and the fixture was generated for
         // mainnet. Foundry's default 31337 would produce a different digest.
@@ -73,6 +73,14 @@ contract EscrowZKTest is Test {
         _forceBondState();
     }
 
+    /// A native statement must name the zero address as its payout asset, which
+    /// is how spec 10.2 encodes a native payout. If the fixture says otherwise
+    /// the circuit and the contract disagree about what is being settled.
+    function test_FixtureIsANativePayout() public view {
+        assertEq(payoutAsset, address(0), "fixture is not a native payout");
+        assertEq(escrow.payoutAsset(), address(0), "escrow payout asset is not native");
+    }
+
     /// The property the integration rests on: the escrow's own statement, built
     /// from storage, equals what the circuit committed to.
     ///
@@ -84,17 +92,20 @@ contract EscrowZKTest is Test {
         assertEq(got[1], signals[1], "low limb differs from the circuit's");
     }
 
-    /// A real proof must settle the escrow and pay the collector.
+    /// A real native proof must settle the escrow and pay the collector in ETH.
     function test_CollectsAgainstARealProof() public {
+        uint256 before = collector.balance;
+
         vm.prank(collector);
         escrow.collect(proof, signals, witnessBlockNumber);
 
+        assertEq(collector.balance - before, payoutAmount, "collector was not paid the payout");
         assertFalse(escrow.funded(), "escrow still funded after collection");
         assertEq(escrow.bondedExecutor(), address(0), "bond not cleared");
         assertEq(escrow.currentRewardAmount(), 0, "reward not cleared");
     }
 
-    /// Gas for the ZK path, against 724,991 for the plaintext path.
+    /// Gas for the native ZK path.
     function test_CollectsAtFifteenMinuteDeadline() public {
         assertEq(escrow.BOND_DURATION_BLOCKS(), 75);
         assertEq(bondDeadline - bondStartBlock, 75);
@@ -117,7 +128,7 @@ contract EscrowZKTest is Test {
         vm.prank(collector);
         uint256 before = gasleft();
         escrow.collect(proof, signals, witnessBlockNumber);
-        emit log_named_uint("zk collect gas", before - gasleft());
+        emit log_named_uint("native zk collect gas", before - gasleft());
     }
 
     /// Signals that do not match the escrow's own computation are rejected
@@ -125,7 +136,7 @@ contract EscrowZKTest is Test {
     function test_RejectsMismatchedSignals() public {
         uint256[2] memory tampered = [signals[0] + 1, signals[1]];
         vm.prank(collector);
-        vm.expectRevert(EscrowERC20.StatementMismatch.selector);
+        vm.expectRevert(EscrowNativeZK.StatementMismatch.selector);
         escrow.collect(proof, tampered, witnessBlockNumber);
     }
 
@@ -154,15 +165,13 @@ contract EscrowZKTest is Test {
         vm.roll(witnessBlockNumber + escrow.MAX_WITNESS_LOOKBACK() + 1);
         vm.store(address(escrow), bytes32(uint256(4)), bytes32(uint256(block.number + 10)));
         vm.prank(collector);
-        vm.expectRevert(EscrowERC20.WitnessBlockTooOld.selector);
+        vm.expectRevert(EscrowNativeZK.WitnessBlockTooOld.selector);
         escrow.collect(proof, signals, witnessBlockNumber);
     }
 
     /// Spec 12.7: the settlement must fall inside the lease, so a witness at or
     /// before the bond start is refused.
     function test_RejectsAWitnessBeforeTheBond() public {
-        // Re-point bondStartBlock (slot 5) to the witness block, so the
-        // settlement no longer falls strictly inside the lease.
         vm.store(address(escrow), bytes32(uint256(5)), bytes32(uint256(witnessBlockNumber)));
         vm.prank(collector);
         vm.expectRevert(EscrowBase.ProofBeforeBond.selector);
@@ -178,33 +187,26 @@ contract EscrowZKTest is Test {
     /// escrow address. The fixture used 0x2222...2222, which no ordinary
     /// deployment produces.
     function _deployAtFixtureAddress() internal {
-        vm.mockCall(payoutAsset, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
-        vm.mockCall(payoutAsset, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
+        uint256 reward = payoutAmount / 4;
 
-        EscrowERC20 built = new EscrowERC20(
-            payoutAsset,
-            payoutAmount,
-            intentCommitment,
-            instanceDomain,
-            requestId,
-            vm.addr(uint256(keccak256("enclave"))),
-            payoutAmount / 4,
-            0
+        EscrowNativeZK built = new EscrowNativeZK{value: reward + payoutAmount}(
+            payoutAmount, intentCommitment, instanceDomain, requestId, vm.addr(uint256(keccak256("enclave"))), reward, 0
         );
 
         vm.etch(fixtureEscrow, address(built).code);
-        escrow = EscrowERC20(fixtureEscrow);
+        escrow = EscrowNativeZK(payable(fixtureEscrow));
 
         // Immutables live in code, so etch carries them. Storage does not, so
-        // the mutable funding state is written below.
+        // the mutable funding state is written below. Balance does not travel
+        // with etch either, and a native payout moves real ETH.
+        vm.deal(fixtureEscrow, reward + payoutAmount);
     }
 
     /// Writes the bond and funding state the statement commits to.
     ///
     /// Bonding through `bond()` would set the deadline from the current block
     /// and the attempt from whatever the counter held; the fixture pins both,
-    /// so they are stored directly. `_forceBondState` therefore stands in for a
-    /// bond that happened at the fixture's block height.
+    /// so they are stored directly.
     function _forceBondState() internal {
         vm.roll(witnessBlockNumber + 1);
         vm.setBlockhash(witnessBlockNumber, witnessBlockHash);
@@ -224,10 +226,8 @@ contract EscrowZKTest is Test {
 
         // Slot 6 packs bondAttempt at offset 0 (4 bytes), then gasAdvanceClaimed,
         // cancellationRequest and funded at byte offsets 4, 5 and 6. Setting
-        // funded means bit 48, per `forge inspect EscrowERC20 storageLayout`.
+        // funded means bit 48, per `forge inspect EscrowNativeZK storageLayout`.
         vm.store(address(escrow), bytes32(uint256(6)), bytes32(uint256(bondAttempt) | (uint256(1) << 48)));
-
-        vm.mockCall(payoutAsset, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
     }
 
     /// The storage writes above assume a layout. If it shifts, they silently

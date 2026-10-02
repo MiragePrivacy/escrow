@@ -128,9 +128,9 @@ abstract contract EscrowBase {
         cancellationRequest = false;
     }
 
-    /// @notice Blocks a bond stays live. ~5 minutes at 12s blocks, matching the
-    /// previous timestamp-based window.
-    uint256 public constant BOND_DURATION_BLOCKS = 25;
+    /// @notice Blocks a bond stays live. ~15 minutes at 12s blocks, allowing
+    /// SGX proof generation to finish before collection expires.
+    uint256 public constant BOND_DURATION_BLOCKS = 75;
 
     // checks if contract is currently bonded by verifying deadline
     function is_bonded() public view returns (bool) {
@@ -205,7 +205,7 @@ abstract contract EscrowBase {
         if (maxGasAdvance > rewardAmount) revert GasAdvanceBudgetExceedsReward();
     }
 
-    // Locks the escrow to the calling EOA for five minutes and optionally releases
+    // Locks the escrow to the calling EOA for about fifteen minutes and optionally releases
     // a capped part of the existing reward. Titan fronts the bundle; the EOA swaps
     // this advance when necessary, repays the builder, and retains collect() gas.
     // No separate ETH bond pot is funded by the sender.
