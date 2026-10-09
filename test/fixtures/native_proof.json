@@ -1,0 +1,25 @@
+{
+  "proof": [
+    "0x2c35eaaeba1b184026271dc5f59d65697d0c649a04a4257937ba00281d6f3038", "0x2708e735616fb13184ea5d71da1f7caa8c2d6bdcf717aff6f2c53c03e51d46b2",
+    "0x17a64b259c717b80ff0508d2ac303b35ab0c1e7a7c74a5692989a5c2ee99ff9f", "0x07341d49a1b8cddcfc94f18a358796d65c28b0c52b2cd930edf50f1af555a8c9", "0x270ca7ec70fcb1d1878c02669cf3baa11dbffc2413e11a625fcda5fb47c3725f", "0x24ad873949187b581c0e25f9ec2f40499c024a65d47395818b24b7314eee0861",
+    "0x0110bf95ba53b4eb54c31b62840697aab293a4614b0bcbbc4ef14d54cbc6aa11", "0x0c3fee7f4eae22c9922ca51e544ddf8180a5792cd03e624c3aabdd3bc2f9037b"
+  ],
+  "publicSignals": ["0x29247ed902f2a5564a17929cd5ba4007", "0xe7847a646b6ec17a4b223cd4a73b916f"],
+  "statement": {
+    "instanceDomain": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "chainId": 1,
+    "escrow": "0x1c81a61a407017c58397a47d2ab28191b9b8ec9b",
+    "requestId": "0x3333333333333333333333333333333333333333333333333333333333333333",
+    "rowIndex": 0,
+    "intentCommitment": "0x9e964f0185804c735262877b19bea05c35acbf795e5eba092216590e7b8cebbb",
+    "bondAttempt": 1,
+    "bondStartBlock": 20999990,
+    "bondDeadline": 21000065,
+    "bondedCollector": "0x5555555555555555555555555555555555555555",
+    "rowPayoutAsset": "0x0000000000000000000000000000000000000000",
+    "rowPayoutAmount": "0x000000000000000000000000000000000000000000000000000000003b9aca00",
+    "witnessBlockNumber": 21000000,
+    "witnessBlockHash": "0x906d8178f242dc5a936eb4a16e1ee4bbb910d2325ab435f1e08f0be652c26410"
+  },
+  "note": "native-ETH relation. proof is [a.x, a.y, b.x1, b.x0, b.y1, b.y0, c.x, c.y]; the EVM pairing precompile takes G2 coordinates in that order, which is the reverse of arkworks' serialization. The statement block is what the escrow must reproduce from its own state for this proof to verify against it."
+}
