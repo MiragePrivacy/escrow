@@ -46,3 +46,18 @@ here: it is compiled rather than read.
 - The fixture's statement context changes, for example its payout asset. The
   escrow test reconstructs that context from `proof.json`, so the two travel
   together.
+
+## Beta ceremony keys
+
+The native, ERC20 and batch-row proof fixtures use the private SGX ceremony
+`beta-sgx-20261104-63a107c`, recorded in circuits commit
+`cc59207bef6d59347d82e2f2266df6051f72fa58` under
+`crates/sgx-ceremony/releases/beta-20261104.json`. Both verifier contracts were
+compared byte-for-byte with the ceremony's verified Solidity exports (renaming
+only the native contract). Batch libraries are derived by the existing script.
+
+To regenerate these proofs, use the existing exporters with
+`MIRAGE_EXPORT_PROVING_KEY` set to the matching verified `final.pk`, as described
+in the circuits SGX ceremony README. Single-transfer fixtures use `--gas-sim`
+to retain the 75-block lease; the ERC20 row fixture uses `--batch-row`. Do not
+use the seeded default setup.
