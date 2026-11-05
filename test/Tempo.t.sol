@@ -4,7 +4,6 @@ pragma solidity ^0.8.30;
 import {Test, Vm} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {EscrowBatch} from "../src/EscrowBatch.sol";
-import {EscrowERC20} from "../src/EscrowERC20.sol";
 import {ReceiptValidator} from "../src/ReceiptValidator.sol";
 import {BatchBondAuth} from "./helpers/BatchBondAuth.sol";
 import {BondAuth} from "./helpers/BondAuth.sol";
@@ -98,34 +97,10 @@ contract TempoTest is Test {
         validator.validateTransferInReceipt(RECEIPT_RLP, 0, address(0xbeef), TO_ADDRESS, AMOUNT);
     }
 
-    function testEndToEndProof() public {
-        address deployer = makeAddr("deployer");
-
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transferFrom.selector), abi.encode(true));
-        vm.mockCall(TOKEN, abi.encodeWithSelector(IERC20.transfer.selector), abi.encode(true));
-
-        Vm.Wallet memory enclave = vm.createWallet("enclave");
-        vm.prank(deployer);
-        EscrowERC20 escrow = new EscrowERC20(TOKEN, TO_ADDRESS, AMOUNT, enclave.addr, 500e18, 0);
-
-        vm.prank(FROM_ADDRESS);
-        escrow.bond(0, BondAuth.sign(vm, enclave.privateKey, address(escrow), FROM_ADDRESS));
-
-        vm.roll(BLOCK_NUMBER + 10);
-        vm.setBlockhash(BLOCK_NUMBER, BLOCK_HASH);
-
-        vm.prank(FROM_ADDRESS);
-        escrow.collect(
-            EscrowERC20.ReceiptProof({
-                blockHeader: BLOCK_HEADER,
-                receiptRlp: RECEIPT_RLP,
-                proofNodes: PROOF_NODES,
-                receiptPath: RECEIPT_PATH,
-                logIndex: 0
-            }),
-            BLOCK_NUMBER
-        );
-    }
+    // testEndToEndProof was removed here. It settled an EscrowERC20 by
+    // parsing an RLP receipt and MPT proof on-chain, which that contract no
+    // longer does. EscrowZK.t.sol covers the ERC-20 settlement path through a
+    // Groth16 proof; the batch case below still uses the plaintext path.
 
     function testEndToEndBatchProof() public {
         address deployer = makeAddr("deployer");

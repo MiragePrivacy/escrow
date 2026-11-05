@@ -373,9 +373,10 @@ contract EscrowBatch {
 
         Bid storage placedBid = bids[msg.sender];
         placedBid.remainingRows = transferIndexes.length;
-        placedBid.expiresAt = block.timestamp + BID_DURATION;
+        placedBid.expiresAt = _bidExpiry();
         placedBid.startBlock = block.number;
         activeBidCount += 1;
+        _onBid(msg.sender);
 
         for (uint256 i = 0; i < transferIndexes.length;) {
             uint256 transferIndex = transferIndexes[i];
@@ -398,7 +399,7 @@ contract EscrowBatch {
     /// @dev Unproved rows remain reserved under the same bid and deadline. After
     /// completing all state changes, settlement attempts to pay each asset directly.
     /// Only a failed asset payout is retained in `claimable` for later withdrawal.
-    function collect(BatchProof[] calldata proofs) external nonReentrant {
+    function collect(BatchProof[] calldata proofs) external virtual nonReentrant {
         _handleExpiredBids();
         Bid storage activeBid = bids[msg.sender];
         if (!funded) revert NotFunded();
@@ -492,6 +493,12 @@ contract EscrowBatch {
     }
 
     // ============ Internal: bid authorization ============
+
+    function _bidExpiry() internal view virtual returns (uint256) {
+        return block.timestamp + BID_DURATION;
+    }
+
+    function _onBid(address) internal virtual {}
 
     function _hashBidAuthorization(address bondingExecutor, uint256[] calldata transferIndexes, uint256 gasAdvance)
         internal

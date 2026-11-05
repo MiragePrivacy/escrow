@@ -28,6 +28,7 @@
         packages = with pkgs; [
           foundry
           jq
+          python3
           (inputs.solc.mkDefault pkgs solc_0_8_30)
         ];
       };

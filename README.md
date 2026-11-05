@@ -26,6 +26,29 @@ Single native-ETH transfer escrow. It verifies transaction inclusion, receipt in
 
 Single ERC-20 transfer escrow. It verifies receipt inclusion and the expected ERC-20 `Transfer(address,address,uint256)` log before reimbursing the reserved executor in the escrow token.
 
+### `EscrowBatchZK.sol`
+
+ZK batch settlement uses one native or ERC-20 Groth16 proof per row, submitted
+through `collectRows`. It reuses `EscrowBatch` reservations, weighted rewards,
+partial collection, cancellation, and failed-payout claims. Constructor rows
+contain `(asset, amount, valueWeight, intentCommitment)` plus shared
+`instanceDomain` and `requestHash`; recipients are not stored. The inherited
+`expectedTransfers` recipient field is a fixed placeholder, not a settlement
+recipient. The inherited plaintext `collect` always reverts.
+
+Each statement binds its row index, commitment, principal payout, collector,
+lease attempt, start/deadline blocks, and witness block. Rewards remain in the
+existing separate asset-weighted accounting. Reservations expire after fifteen
+minutes; proofs also have a 75-block collection deadline and 128-block witness
+lookback. Clients and Nomad reject identical settlement rows; the circuit still
+relies on the existing policy against overlapping identical live intents.
+
+The verifier libraries are generated from the pinned single-row verifier
+exports by `scripts/batch_verifiers.py`. `make artifacts` regenerates them and
+writes `batch_zk_deployment.hex` and `batch_zk_runtime.hex`. The existing circuits
+and setup keys are unchanged. Real native, nonzero-row ERC-20, and mixed-proof
+collection tests live in `test/EscrowBatchZK.t.sol`.
+
 ### `EscrowBatch.sol`
 
 Batch escrow for one or more expected transfers. A bidder uses a constructor-approved, one-time blinded signer to reserve selected rows without collateral. Each proved row settles permanently and receives principal reimbursement plus a value-weighted reward share; expired reservations automatically release only their unfinished rows.

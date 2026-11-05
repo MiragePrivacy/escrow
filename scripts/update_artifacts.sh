@@ -14,6 +14,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+python3 scripts/batch_verifiers.py
+
 # Always recompile so artifact generation cannot reuse stale incremental output.
 forge build --silent --force
 
@@ -36,3 +38,5 @@ echo "Updating bytecode artifacts:"
 extract EscrowERC20  erc20
 extract EscrowNative native
 extract EscrowBatch  batch
+extract EscrowNativeZK native_zk
+extract EscrowBatchZK batch_zk
