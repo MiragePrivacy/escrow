@@ -5,6 +5,7 @@ libs = ["lib"]
 via_ir = true
 optimizer = true
 optimizer_runs = 200
+evm_version = "prague"
 extra_output = ["evm.legacyAssembly", "storageLayout"]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

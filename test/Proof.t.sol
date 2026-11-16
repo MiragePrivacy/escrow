@@ -54,11 +54,6 @@ contract EscrowMPTTest is Test {
     bytes32 constant TARGET_BLOCK_HASH = 0x490a3fc0b0c2170b55ca18ce6c73fc1af50ebe0931b525a3510c048f2b428617; // From: block_hash
 
     function testCollectWithTransferProof_EIP1559() public {
-        // Skip this test when on Tempo chain since it uses EIP-1559 block header
-        if (block.chainid == 42429) {
-            vm.skip(true);
-        }
-
         deployer = makeAddr("deployer");
         Vm.Wallet memory enclave = vm.createWallet("enclave");
         address proofTokenAddress = address(0xBe41a9EC942d5b52bE07cC7F4D7E30E10e9B652A); // From: logs[0].address
@@ -106,11 +101,6 @@ contract EscrowMPTTest is Test {
     }
 
     function testCollectNativeWithTransactionProof_EIP1559() public {
-        // Skip this test when on Tempo chain since it uses EIP-1559 block header
-        if (block.chainid == 42429) {
-            vm.skip(true);
-        }
-
         deployer = makeAddr("deployer");
         Vm.Wallet memory enclave = vm.createWallet("enclave");
 
