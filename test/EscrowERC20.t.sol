@@ -56,6 +56,13 @@ contract EscrowERC20Test is Test {
     uint256 constant GAS_ADVANCE_BUDGET = REWARD_AMOUNT / 2;
     uint256 constant PAYMENT_AMOUNT = EXPECTED_AMOUNT;
 
+    // The settled token, recipient and amount are hidden behind this digest
+    // now, so the tests below cannot assert them. Its opening lives with the
+    // enclave; any non-zero value serves for the state-machine tests here.
+    bytes32 constant COMMITMENT = keccak256("intent commitment");
+    bytes32 constant INSTANCE_DOMAIN = keccak256("instance domain");
+    bytes32 constant REQUEST_ID = keccak256("request id");
+
     function setUp() public {
         deployer = makeAddr("deployer");
         executor = makeAddr("executor");
@@ -73,7 +80,14 @@ contract EscrowERC20Test is Test {
         token.approve(futureEscrow, REWARD_AMOUNT + PAYMENT_AMOUNT);
 
         escrow = new EscrowERC20(
-            address(token), recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, GAS_ADVANCE_BUDGET
+            address(token),
+            PAYMENT_AMOUNT,
+            COMMITMENT,
+            INSTANCE_DOMAIN,
+            REQUEST_ID,
+            enclave.addr,
+            REWARD_AMOUNT,
+            GAS_ADVANCE_BUDGET
         );
         vm.stopPrank();
     }
@@ -81,7 +95,9 @@ contract EscrowERC20Test is Test {
     // Deploys an unfunded escrow (constructor defers fund()).
     function _newUnfunded() internal returns (EscrowERC20) {
         vm.prank(deployer);
-        return new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, enclave.addr, 0, GAS_ADVANCE_BUDGET);
+        return new EscrowERC20(
+            address(token), PAYMENT_AMOUNT, COMMITMENT, INSTANCE_DOMAIN, REQUEST_ID, enclave.addr, 0, GAS_ADVANCE_BUDGET
+        );
     }
 
     // Signs a valid BondAuth for `bondingExecutor` against `escrowAddr`.
@@ -98,8 +114,9 @@ contract EscrowERC20Test is Test {
         assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT);
         assertEq(escrow.currentPaymentAmount(), PAYMENT_AMOUNT);
         assertEq(escrow.funded(), true);
-        assertEq(escrow.expectedRecipient(), recipient);
-        assertEq(escrow.expectedAmount(), EXPECTED_AMOUNT);
+        assertEq(escrow.payoutAsset(), address(token));
+        assertEq(escrow.payoutAmount(), PAYMENT_AMOUNT);
+        assertEq(escrow.intentCommitment(), COMMITMENT);
         assertEq(escrow.blindedSigner(), enclave.addr);
         assertEq(escrow.maxGasAdvance(), GAS_ADVANCE_BUDGET);
         assertEq(escrow.deployerAddress(), deployer);
@@ -113,8 +130,9 @@ contract EscrowERC20Test is Test {
         address futureEscrow2 = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow2, REWARD_AMOUNT + PAYMENT_AMOUNT);
 
-        EscrowERC20 escrow2 =
-            new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, enclave.addr, 0, GAS_ADVANCE_BUDGET);
+        EscrowERC20 escrow2 = new EscrowERC20(
+            address(token), PAYMENT_AMOUNT, COMMITMENT, INSTANCE_DOMAIN, REQUEST_ID, enclave.addr, 0, GAS_ADVANCE_BUDGET
+        );
 
         token.approve(address(escrow2), REWARD_AMOUNT + PAYMENT_AMOUNT);
         escrow2.fund(REWARD_AMOUNT);
@@ -161,7 +179,7 @@ contract EscrowERC20Test is Test {
         _bondExecutor();
 
         assertEq(escrow.bondedExecutor(), executor);
-        assertEq(escrow.executionDeadline(), block.timestamp + 5 minutes);
+        assertEq(escrow.executionDeadline(), block.number + escrow.BOND_DURATION_BLOCKS());
         assertEq(escrow.bondStartBlock(), block.number);
         assertTrue(escrow.is_bonded());
         assertEq(address(escrow).balance, 0);
@@ -196,7 +214,16 @@ contract EscrowERC20Test is Test {
         address futureEscrow = vm.computeCreateAddress(deployer, vm.getNonce(deployer));
         token.approve(futureEscrow, REWARD_AMOUNT + PAYMENT_AMOUNT);
         vm.expectRevert(EscrowBase.GasAdvanceBudgetExceedsReward.selector);
-        new EscrowERC20(address(token), recipient, EXPECTED_AMOUNT, enclave.addr, REWARD_AMOUNT, REWARD_AMOUNT + 1);
+        new EscrowERC20(
+            address(token),
+            PAYMENT_AMOUNT,
+            COMMITMENT,
+            INSTANCE_DOMAIN,
+            REQUEST_ID,
+            enclave.addr,
+            REWARD_AMOUNT,
+            REWARD_AMOUNT + 1
+        );
         vm.stopPrank();
     }
 
@@ -213,7 +240,7 @@ contract EscrowERC20Test is Test {
         vm.prank(executor);
         escrow.bond(gasAdvance, BondAuth.sign(vm, enclave.privateKey, address(escrow), executor, gasAdvance));
 
-        vm.warp(block.timestamp + 6 minutes);
+        vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
         vm.prank(other);
         vm.expectRevert(EscrowBase.GasAdvanceAlreadyClaimed.selector);
         escrow.bond(1, BondAuth.sign(vm, enclave.privateKey, address(escrow), other, 1));
@@ -263,7 +290,7 @@ contract EscrowERC20Test is Test {
     function testBondAfterDeadlinePassed() public {
         _bondExecutor();
 
-        vm.warp(block.timestamp + 6 minutes);
+        vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
 
         uint256 otherBefore = other.balance;
         vm.prank(other);
@@ -304,10 +331,15 @@ contract EscrowERC20Test is Test {
         escrow.resume();
     }
 
-    function _dummyProof() internal pure returns (EscrowERC20.ReceiptProof memory) {
-        return EscrowERC20.ReceiptProof({
-            blockHeader: hex"", receiptRlp: hex"", proofNodes: hex"", receiptPath: hex"", logIndex: 0
-        });
+    // A structurally valid but meaningless proof. Every test here checks a
+    // guard clause that runs before verification, so the proof is never
+    // reached; EscrowZK.t.sol covers the verifying path with a real one.
+    function _dummyProof() internal pure returns (uint256[8] memory) {
+        return [uint256(0), 0, 0, 0, 0, 0, 0, 0];
+    }
+
+    function _dummySignals() internal pure returns (uint256[2] memory) {
+        return [uint256(0), 0];
     }
 
     function testCollectRequiresProof() public {
@@ -319,7 +351,7 @@ contract EscrowERC20Test is Test {
 
         vm.prank(executor);
         vm.expectRevert();
-        escrow.collect(_dummyProof(), proofBlock);
+        escrow.collect(_dummyProof(), _dummySignals(), uint64(proofBlock));
     }
 
     function testCollectRejectsProofBeforeBond() public {
@@ -328,36 +360,36 @@ contract EscrowERC20Test is Test {
 
         vm.prank(executor);
         vm.expectRevert(EscrowBase.ProofBeforeBond.selector);
-        escrow.collect(_dummyProof(), block.number - 1);
+        escrow.collect(_dummyProof(), _dummySignals(), uint64(block.number - 1));
     }
 
     function testCollectNotFunded() public {
         EscrowERC20 unfunded = _newUnfunded();
         vm.prank(executor);
         vm.expectRevert(EscrowBase.NotFunded.selector);
-        unfunded.collect(_dummyProof(), block.number - 1);
+        unfunded.collect(_dummyProof(), _dummySignals(), uint64(block.number - 1));
     }
 
     function testCollectNotBondedExecutor() public {
         _bondExecutor();
         vm.prank(other);
         vm.expectRevert(EscrowBase.OnlyBondedExecutor.selector);
-        escrow.collect(_dummyProof(), block.number - 1);
+        escrow.collect(_dummyProof(), _dummySignals(), uint64(block.number - 1));
     }
 
     function testCollectAfterDeadline() public {
         _bondExecutor();
-        vm.warp(block.timestamp + 6 minutes);
+        vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
         vm.prank(executor);
         vm.expectRevert(EscrowBase.OnlyBondedExecutor.selector);
-        escrow.collect(_dummyProof(), block.number - 1);
+        escrow.collect(_dummyProof(), _dummySignals(), uint64(block.number - 1));
     }
 
     function testIsBonded() public {
         assertFalse(escrow.is_bonded());
         _bondExecutor();
         assertTrue(escrow.is_bonded());
-        vm.warp(block.timestamp + 6 minutes);
+        vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
         assertFalse(escrow.is_bonded());
     }
 
@@ -371,7 +403,7 @@ contract EscrowERC20Test is Test {
     function testBondAfterFirstExecutorStillActive() public {
         _bondExecutor();
 
-        vm.warp(block.timestamp + 4 minutes);
+        vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() - 5);
         assertTrue(escrow.is_bonded());
 
         vm.prank(other);
@@ -420,7 +452,7 @@ contract EscrowERC20Test is Test {
     // After a zero-advance reservation expires, the complete token balance remains refundable.
     function testCancelAndWithdrawAfterBondExpired() public {
         _bondExecutor();
-        vm.warp(block.timestamp + 6 minutes);
+        vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
 
         uint256 tokenBefore = token.balanceOf(deployer);
         uint256 ethBefore = deployer.balance;
@@ -447,7 +479,7 @@ contract EscrowERC20Test is Test {
         uint256 gasAdvance = REWARD_AMOUNT / 4;
         vm.prank(executor);
         escrow.bond(gasAdvance, BondAuth.sign(vm, enclave.privateKey, address(escrow), executor, gasAdvance));
-        vm.warp(block.timestamp + 6 minutes);
+        vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
 
         uint256 deployerBefore = token.balanceOf(deployer);
         vm.prank(deployer);
