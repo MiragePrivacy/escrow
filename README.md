@@ -32,7 +32,7 @@ Batch escrow for one or more expected transfers. A bidder uses a constructor-app
 
 ### Proof libraries
 
-- `BlockHeaderParser.sol` reads block numbers and trie roots from Ethereum and Tempo-wrapped headers.
+- `BlockHeaderParser.sol` reads block numbers and trie roots from Ethereum headers.
 - `MPTVerifier.sol` verifies transaction and receipt trie inclusion.
 - `ReceiptValidator.sol` validates receipt status, ERC-20 transfer logs, and native transfer fields.
 - `RLPParser.sol` provides low-level RLP helpers.
