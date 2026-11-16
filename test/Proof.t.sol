@@ -55,14 +55,10 @@ contract ProofTest is Test {
     // ERC-20 Transfer by parsing an RLP receipt and walking an MPT proof
     // on-chain, which EscrowERC20 no longer does; EscrowZK.t.sol covers the
     // same settlement through a Groth16 proof instead. The native case below
-    // still uses the plaintext path, since the circuit is ERC-20 only.
+    // exercises the retained plaintext EscrowNative path; native ZK settlement
+    // is covered separately in EscrowNativeZK.t.sol.
 
     function testCollectNativeWithTransactionProof_EIP1559() public {
-        // Skip this test when on Tempo chain since it uses EIP-1559 block header
-        if (block.chainid == 42429) {
-            vm.skip(true);
-        }
-
         deployer = makeAddr("deployer");
         Vm.Wallet memory enclave = vm.createWallet("enclave");
 
