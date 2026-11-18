@@ -10,7 +10,7 @@ Mirage separates a private payment into offchain coordination and onchain settle
 
 Execution is coordinated through a reservation-style auction system. Nomad nodes inspect encrypted requests offchain and reserve a request for a short time when they are confident they can fulfill it. During that reservation window, the node sends the requested transfer from its own liquidity, then claims reimbursement by submitting an onchain proof.
 
-The escrow does not trust the node's claim. It verifies recent block data, Merkle-Patricia trie inclusion proofs, transaction receipt contents, and expected transfer details before releasing reimbursement and reward funds.
+The current settlement path verifies a Groth16 proof before releasing reimbursement and rewards. Nomad builds the proof offchain from Ethereum transaction or receipt data. The contract reconstructs the expected public inputs from its own state and a recent witness block. The proof binds delivery to the intent commitment while keeping the receipt, transaction index, and exact delivery block out of the collection call. Onchain deposits, recipient payments, and reimbursements remain visible.
 
 ## Contracts
 
@@ -18,13 +18,13 @@ The escrow does not trust the node's claim. It verifies recent block data, Merkl
 
 Shared base for single-transfer escrows. It handles deployer controls, cancellation, blinded-signer authorization, EIP-712 `BondAuth` validation, short-lived reservation locks, and recent block header checks.
 
-### `EscrowNative.sol`
+### `EscrowNativeZK.sol`
 
-Single native-ETH transfer escrow. It verifies transaction inclusion, receipt inclusion, successful execution, and the transaction `to` / `value` fields before reimbursing the reserved executor.
+Single native-ETH escrow. It verifies a Groth16 proof of both transaction and successful receipt inclusion at the same index. The circuit checks the transaction’s `to` and `value` against the committed payment. `EscrowNative.sol` contains the earlier plaintext path.
 
 ### `EscrowERC20.sol`
 
-Single ERC-20 transfer escrow. It verifies receipt inclusion and the expected ERC-20 `Transfer(address,address,uint256)` log before reimbursing the reserved executor in the escrow token.
+Single ERC-20 escrow. It verifies a Groth16 proof that a successful receipt contains the matching ERC-20 `Transfer(address,address,uint256)` log.
 
 ### `EscrowBatchZK.sol`
 
@@ -51,7 +51,7 @@ collection tests live in `test/EscrowBatchZK.t.sol`.
 
 ### `EscrowBatch.sol`
 
-Batch escrow for one or more expected transfers. A bidder uses a constructor-approved, one-time blinded signer to reserve selected rows without collateral. Each proved row settles permanently and receives principal reimbursement plus a value-weighted reward share; expired reservations automatically release only their unfinished rows.
+Batch reservation and payout implementation reused by the ZK batch escrow. It also contains the earlier plaintext collection path. A bidder uses a constructor-approved, one-time blinded signer to reserve selected rows without collateral. Each proved row settles permanently and receives principal reimbursement plus a value-weighted reward share; expired reservations automatically release only their unfinished rows.
 
 ### Proof libraries
 
@@ -71,8 +71,13 @@ graph TD
     EscrowBase --> ECDSA
     EscrowNative --> MPTVerifier
     EscrowNative --> ReceiptValidator
-    EscrowERC20 --> MPTVerifier
-    EscrowERC20 --> ReceiptValidator
+    EscrowERC20 --> Verifier
+    EscrowERC20 --> StatementHash
+    EscrowNativeZK --> EscrowBase
+    EscrowNativeZK --> NativeVerifier
+    EscrowNativeZK --> StatementHash
+    EscrowBatchZK --> EscrowBatch
+    EscrowBatchZK --> StatementHash
     EscrowBatch --> BlockHeaderParser
     EscrowBatch --> MPTVerifier
     EscrowBatch --> ReceiptValidator
@@ -86,12 +91,12 @@ graph TD
 This repo is the canonical source for the escrow logic. The normal build pipeline compiles these contracts with Foundry, then `make artifacts` regenerates the pinned bytecode files in `artifacts/` for:
 
 - `EscrowERC20`
-- `EscrowNative`
-- `EscrowBatch`
+- `EscrowNativeZK` and the earlier `EscrowNative`
+- `EscrowBatchZK` and the earlier `EscrowBatch`
 
 CI includes a bytecode guard so source changes that affect compiled output must update the pinned artifacts in the same change.
 
-Azoth sits on top of this canonical bytecode. Deployment tooling can take the open-source escrow bytecode, run it through Azoth with deterministic variation parameters, and produce a contract variant that behaves like the original escrow but has a different bytecode-level shape. The point is not to hide unsafe logic; it is to avoid every Mirage escrow sharing one easy-to-fingerprint bytecode signature.
+Azoth sits on top of this canonical bytecode. Deployment tooling can take the open-source escrow bytecode, run it through Azoth with deterministic variation parameters, and produce a contract variant that behaves like the original escrow but has a different bytecode-level shape. That variation makes matching one known contract a less useful way to identify other Mirage escrows. Observers can still look for shared patterns in the bytecode or how the contract is used. The Groth16 proof protects payment evidence independently.
 
 Because Azoth is deterministic, the verification path is reproducible:
 
