@@ -96,7 +96,7 @@ This repo is the canonical source for the escrow logic. The normal build pipelin
 
 CI includes a bytecode guard so source changes that affect compiled output must update the pinned artifacts in the same change.
 
-Azoth sits on top of this canonical bytecode. Deployment tooling can take the open-source escrow bytecode, run it through Azoth with deterministic variation parameters, and produce a contract variant that behaves like the original escrow but has a different bytecode-level shape. This provides light bytecode camouflage. Observers can still recognize patterns in the bytecode or how the contract is used. The Groth16 proof protects payment evidence independently.
+Azoth sits on top of this canonical bytecode. Deployment tooling can take the open-source escrow bytecode, run it through Azoth with deterministic variation parameters, and produce a contract variant that behaves like the original escrow but has a different bytecode-level shape. That variation makes matching one known contract a less useful way to identify other Mirage escrows. Observers can still look for shared patterns in the bytecode or how the contract is used. The Groth16 proof protects payment evidence independently.
 
 Because Azoth is deterministic, the verification path is reproducible:
 
