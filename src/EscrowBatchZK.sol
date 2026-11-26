@@ -9,6 +9,10 @@ import {BatchNativeVerifier} from "./BatchNativeVerifier.sol";
 /// @notice Progressive batch settlement with one Groth16 proof per row.
 /// @dev Clients must reject overlapping identical settlement intents.
 contract EscrowBatchZK is EscrowBatch {
+    function _usesRequestWindow() internal pure override returns (bool) {
+        return true;
+    }
+
     struct Row {
         address asset;
         uint256 amount;
@@ -61,12 +65,12 @@ contract EscrowBatchZK is EscrowBatch {
     }
 
     function _bidExpiry() internal view override returns (uint256) {
-        return block.timestamp + 15 minutes;
+        return collectionDeadline();
     }
 
     function _onBid(address bidder) internal override {
         bondAttempts[bidder] += 1;
-        bondBlockDeadlines[bidder] = uint64(block.number) + BOND_BLOCKS;
+        bondBlockDeadlines[bidder] = uint64(paymentBlockDeadline());
     }
 
     function collect(BatchProof[] calldata) external pure override {
@@ -76,9 +80,9 @@ contract EscrowBatchZK is EscrowBatch {
     function collectRows(RowProof[] calldata proofs) external nonReentrant {
         _handleExpiredBids();
         if (!funded) revert NotFunded();
+        _requireCollectionWindow();
         Bid storage activeBid = bids[msg.sender];
         if (activeBid.expiresAt == 0 || block.timestamp > activeBid.expiresAt) revert OnlyActiveBidder();
-        if (block.number > bondBlockDeadlines[msg.sender]) revert BondBlockDeadlineExpired();
         if (proofs.length == 0 || proofs.length > expectedTransfers.length) revert MalformedProof();
         uint256[] memory indexes = new uint256[](proofs.length);
         for (uint256 i; i < proofs.length; ++i) {

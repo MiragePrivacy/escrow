@@ -4,6 +4,7 @@ pragma solidity 0.8.30;
 import {Test} from "forge-std/Test.sol";
 import {EscrowNativeZK} from "../src/EscrowNativeZK.sol";
 import {EscrowBase} from "../src/EscrowBase.sol";
+import {RequestWindow} from "../src/RequestWindow.sol";
 
 /// @title End-to-end native collection against a real Groth16 proof
 /// @notice The native counterpart to `EscrowZKTest`, and the test that would
@@ -116,11 +117,26 @@ contract EscrowNativeZKTest is Test {
         assertFalse(escrow.funded());
     }
 
-    function test_RejectsCollectionAfterFifteenMinuteDeadline() public {
+    function test_OnTimePaymentCollectsAfterPaymentDeadline() public {
         vm.roll(bondDeadline + 1);
         vm.setBlockhash(witnessBlockNumber, witnessBlockHash);
+        vm.warp(escrow.paymentDeadline() + 1);
         vm.prank(collector);
-        vm.expectRevert(EscrowBase.OnlyBondedExecutor.selector);
+        escrow.collect(proof, signals, witnessBlockNumber);
+        assertFalse(escrow.funded());
+    }
+
+    function test_RejectsCollectionAfterCollectionBlockDeadline() public {
+        vm.roll(escrow.collectionBlockDeadline() + 1);
+        vm.prank(collector);
+        vm.expectRevert(RequestWindow.CollectionWindowClosed.selector);
+        escrow.collect(proof, signals, witnessBlockNumber);
+    }
+
+    function test_RejectsCollectionAtFixedRefundTimestamp() public {
+        vm.warp(escrow.collectionDeadline());
+        vm.prank(collector);
+        vm.expectRevert(RequestWindow.CollectionWindowClosed.selector);
         escrow.collect(proof, signals, witnessBlockNumber);
     }
 
@@ -210,6 +226,12 @@ contract EscrowNativeZKTest is Test {
     function _forceBondState() internal {
         vm.roll(witnessBlockNumber + 1);
         vm.setBlockhash(witnessBlockNumber, witnessBlockHash);
+        bytes32 window = bytes32(uint256(0x014ac5509487808893ddf697b19b08bdb0));
+        vm.store(address(escrow), window, bytes32(block.timestamp));
+        vm.store(address(escrow), bytes32(uint256(window) + 1), bytes32(block.timestamp + 15 minutes));
+        vm.store(address(escrow), bytes32(uint256(window) + 2), bytes32(block.timestamp + 30 minutes));
+        vm.store(address(escrow), bytes32(uint256(window) + 3), bytes32(uint256(bondDeadline)));
+        vm.store(address(escrow), bytes32(uint256(window) + 4), bytes32(uint256(bondDeadline) + 75));
 
         // EscrowBase storage layout, verified in test_StorageLayoutIsAsAssumed.
         //
