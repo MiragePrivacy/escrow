@@ -41,4 +41,7 @@ extract EscrowBatch  batch
 extract EscrowNativeZK native_zk
 extract EscrowBatchZK batch_zk
 
+extract EscrowERC203009 erc20_3009
+extract EscrowBatchZK3009 batch_zk_3009
+
 python3 scripts/check_artifact_layout.py
