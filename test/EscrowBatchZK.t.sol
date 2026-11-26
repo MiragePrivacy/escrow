@@ -201,7 +201,9 @@ contract EscrowBatchZKTest is Test {
         rowProof.witnessBlockNumber = uint64(vm.parseJsonUint(json, ".statement.witnessBlockNumber"));
         uint256[] memory points = vm.parseJsonUintArray(json, ".proof");
         uint256[] memory signals = vm.parseJsonUintArray(json, ".publicSignals");
-        for (uint256 i; i < 8; ++i) rowProof.proof[i] = points[i];
+        for (uint256 i; i < 8; ++i) {
+            rowProof.proof[i] = points[i];
+        }
         rowProof.signals = [signals[0], signals[1]];
         vm.roll(start + 76);
         vm.warp(escrow.paymentDeadline() + 1);
