@@ -220,7 +220,7 @@ contract EscrowBatch is RequestWindow {
         totalValueWeight = totalWeight;
 
         if (_currentRewardAmount > 0) {
-            _fund(_currentRewardAmount);
+            _fund(_currentRewardAmount, _pullDeploymentAsset);
         } else if (msg.value != 0) {
             revert IncorrectNativeAmount();
         }
@@ -290,7 +290,7 @@ contract EscrowBatch is RequestWindow {
         if (funded || hasBeenFunded) revert AlreadyFunded();
         if (cancellationRequest) revert CancellationRequested();
 
-        _fund(_currentRewardAmount);
+        _fund(_currentRewardAmount, _pullApprovedAsset);
     }
 
     function requestCancellation() external {
@@ -516,7 +516,15 @@ contract EscrowBatch is RequestWindow {
 
     // ============ Internal: funding ============
 
-    function _fund(uint256 _currentRewardAmount) internal {
+    function _pullApprovedAsset(address asset, uint256 amount) internal {
+        IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
+    }
+
+    function _pullDeploymentAsset(address asset, uint256 amount) internal virtual {
+        _pullApprovedAsset(asset, amount);
+    }
+
+    function _fund(uint256 _currentRewardAmount, function(address, uint256) internal pullAsset) private {
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
         if (maxGasAdvance > _currentRewardAmount) revert GasAdvanceBudgetExceedsReward();
 
@@ -549,7 +557,7 @@ contract EscrowBatch is RequestWindow {
                 rewardAssetFunded = true;
             }
 
-            if (asset != address(0)) IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
+            if (asset != address(0)) pullAsset(asset, amount);
 
             unchecked {
                 ++i;
@@ -557,7 +565,7 @@ contract EscrowBatch is RequestWindow {
         }
 
         if (!rewardAssetFunded && rewardAsset != address(0)) {
-            IERC20(rewardAsset).safeTransferFrom(msg.sender, address(this), _currentRewardAmount);
+            pullAsset(rewardAsset, _currentRewardAmount);
         }
     }
 

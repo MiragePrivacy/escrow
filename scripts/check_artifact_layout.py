@@ -13,7 +13,7 @@ def check_layout(creation: bytes, runtime: bytes, name: str) -> None:
 
 def main() -> None:
     artifacts = Path(__file__).resolve().parents[1] / "artifacts"
-    for name in ("erc20", "native", "batch", "native_zk", "batch_zk"):
+    for name in ("erc20", "native", "batch", "native_zk", "batch_zk", "erc20_3009", "batch_zk_3009"):
         creation = bytes.fromhex((artifacts / f"{name}_deployment.hex").read_text().strip().removeprefix("0x"))
         runtime = bytes.fromhex((artifacts / f"{name}_runtime.hex").read_text().strip().removeprefix("0x"))
         check_layout(creation, runtime, name)

@@ -26,6 +26,10 @@ Single native-ETH escrow. It verifies a Groth16 proof of both transaction and su
 
 Single ERC-20 escrow. It verifies a Groth16 proof that a successful receipt contains the matching ERC-20 `Transfer(address,address,uint256)` log.
 
+### ERC-3009 USDC funding
+
+The `erc20_3009` and `batch_zk_3009` deployment artifacts accept a one-time USDC receive authorization. Append `abi.encode(token, validAfter, validBefore, nonce, v, r, s)` to the complete, canonical constructor arguments. The field types are `(address,uint256,uint256,bytes32,uint8,bytes32,bytes32)`. Batch offsets keep their original values. The USDC token verifies the deployer’s signature for the predicted escrow address and exact total USDC deposit, including any reward denominated in USDC. Each other ERC-20 deposit uses its allowance and native ETH uses `msg.value`. Ordinary deployment uses the existing `erc20` or `batch_zk` artifact.
+
 ### `EscrowBatchZK.sol`
 
 ZK batch settlement uses one native or ERC-20 Groth16 proof per row, submitted

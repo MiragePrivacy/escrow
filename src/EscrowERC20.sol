@@ -108,13 +108,25 @@ contract EscrowERC20 is EscrowBase, Verifier {
         requestHash = _requestId;
 
         if (_currentRewardAmount > 0) {
-            fund(_currentRewardAmount);
+            _fund(_currentRewardAmount, _pullDeploymentAsset);
         }
     }
 
     // Takes currentRewardAmount + the payout from the deployer's token balance. The
     // sender deposits no ETH execution-gas surcharge; Nomad provisions executor gas.
     function fund(uint256 _currentRewardAmount) public {
+        _fund(_currentRewardAmount, _pullApprovedAsset);
+    }
+
+    function _pullApprovedAsset(address asset, uint256 amount) internal {
+        IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
+    }
+
+    function _pullDeploymentAsset(address asset, uint256 amount) internal virtual {
+        _pullApprovedAsset(asset, amount);
+    }
+
+    function _fund(uint256 _currentRewardAmount, function(address, uint256) internal pullAsset) private {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (funded) revert AlreadyFunded();
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
@@ -125,7 +137,7 @@ contract EscrowERC20 is EscrowBase, Verifier {
         originalRewardAmount = _currentRewardAmount;
         currentPaymentAmount = payoutAmount;
         gasAdvanceClaimed = false;
-        IERC20(payoutAsset).safeTransferFrom(msg.sender, address(this), originalRewardAmount + currentPaymentAmount);
+        pullAsset(payoutAsset, originalRewardAmount + currentPaymentAmount);
         funded = true;
     }
 
