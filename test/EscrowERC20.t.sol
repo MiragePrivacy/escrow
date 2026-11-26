@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import {Test, Vm} from "forge-std/Test.sol";
 import {EscrowERC20} from "../src/EscrowERC20.sol";
 import {EscrowBase} from "../src/EscrowBase.sol";
+import {RequestWindow} from "../src/RequestWindow.sol";
 import {BondAuth} from "./helpers/BondAuth.sol";
 
 contract MockERC20 {
@@ -242,12 +243,13 @@ contract EscrowERC20Test is Test {
 
         vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
         vm.prank(other);
-        vm.expectRevert(EscrowBase.GasAdvanceAlreadyClaimed.selector);
+        vm.expectRevert(RequestWindow.PaymentWindowClosed.selector);
         escrow.bond(1, BondAuth.sign(vm, enclave.privateKey, address(escrow), other, 1));
 
         vm.prank(other);
+        vm.expectRevert(RequestWindow.PaymentWindowClosed.selector);
         escrow.bond(0, _sig(address(escrow), other));
-        assertEq(escrow.bondedExecutor(), other);
+        assertEq(escrow.bondedExecutor(), executor);
         assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT - gasAdvance);
     }
 
@@ -286,17 +288,18 @@ contract EscrowERC20Test is Test {
         escrow.bond(0, _sig(address(escrow), executor));
     }
 
-    // An expired reservation frees the lock for a fresh enclave-authorized EOA.
-    function testBondAfterDeadlinePassed() public {
+    // Passing the payment cutoff cannot replace a collector's on-time claim.
+    function testPaymentDeadlineDoesNotFreeOriginalCollector() public {
         _bondExecutor();
 
         vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
 
         uint256 otherBefore = other.balance;
         vm.prank(other);
+        vm.expectRevert(RequestWindow.PaymentWindowClosed.selector);
         escrow.bond(0, _sig(address(escrow), other));
 
-        assertEq(escrow.bondedExecutor(), other);
+        assertEq(escrow.bondedExecutor(), executor);
         assertEq(escrow.currentRewardAmount(), REWARD_AMOUNT);
         assertEq(other.balance, otherBefore);
     }
@@ -355,7 +358,7 @@ contract EscrowERC20Test is Test {
     }
 
     function testCollectRejectsProofBeforeBond() public {
-        vm.roll(100);
+        vm.roll(10);
         _bondExecutor();
 
         vm.prank(executor);
@@ -379,9 +382,9 @@ contract EscrowERC20Test is Test {
 
     function testCollectAfterDeadline() public {
         _bondExecutor();
-        vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
+        vm.roll(escrow.collectionBlockDeadline() + 1);
         vm.prank(executor);
-        vm.expectRevert(EscrowBase.OnlyBondedExecutor.selector);
+        vm.expectRevert(RequestWindow.CollectionWindowClosed.selector);
         escrow.collect(_dummyProof(), _dummySignals(), uint64(block.number - 1));
     }
 
@@ -390,6 +393,8 @@ contract EscrowERC20Test is Test {
         _bondExecutor();
         assertTrue(escrow.is_bonded());
         vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
+        assertTrue(escrow.is_bonded());
+        vm.warp(escrow.collectionDeadline());
         assertFalse(escrow.is_bonded());
     }
 
@@ -415,6 +420,7 @@ contract EscrowERC20Test is Test {
 
     // Withdraw returns the token reward and principal without an ETH gas pot.
     function testCancelAndWithdraw() public {
+        vm.warp(escrow.collectionDeadline());
         uint256 tokenBefore = token.balanceOf(deployer);
         uint256 ethBefore = deployer.balance;
 
@@ -445,7 +451,7 @@ contract EscrowERC20Test is Test {
     function testCancelAndWithdrawWhileBonded() public {
         _bondExecutor();
         vm.prank(deployer);
-        vm.expectRevert(EscrowBase.BondActive.selector);
+        vm.expectRevert(RequestWindow.RedemptionWindowActive.selector);
         escrow.cancelAndWithdraw();
     }
 
@@ -453,6 +459,7 @@ contract EscrowERC20Test is Test {
     function testCancelAndWithdrawAfterBondExpired() public {
         _bondExecutor();
         vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
+        vm.warp(escrow.collectionDeadline());
 
         uint256 tokenBefore = token.balanceOf(deployer);
         uint256 ethBefore = deployer.balance;
@@ -467,6 +474,7 @@ contract EscrowERC20Test is Test {
     }
 
     function testCancelAndWithdrawPreventsRaceCondition() public {
+        vm.warp(escrow.collectionDeadline());
         vm.prank(deployer);
         escrow.cancelAndWithdraw();
 
@@ -480,6 +488,7 @@ contract EscrowERC20Test is Test {
         vm.prank(executor);
         escrow.bond(gasAdvance, BondAuth.sign(vm, enclave.privateKey, address(escrow), executor, gasAdvance));
         vm.roll(block.number + escrow.BOND_DURATION_BLOCKS() + 1);
+        vm.warp(escrow.collectionDeadline());
 
         uint256 deployerBefore = token.balanceOf(deployer);
         vm.prank(deployer);
@@ -492,6 +501,7 @@ contract EscrowERC20Test is Test {
     function testCancelAndWithdrawAlreadyCancelled() public {
         vm.prank(deployer);
         escrow.requestCancellation();
+        vm.warp(escrow.collectionDeadline());
 
         uint256 tokenBefore = token.balanceOf(deployer);
 
@@ -501,5 +511,41 @@ contract EscrowERC20Test is Test {
         assertTrue(escrow.cancellationRequest());
         assertFalse(escrow.funded());
         assertEq(token.balanceOf(deployer), tokenBefore + REWARD_AMOUNT + PAYMENT_AMOUNT);
+    }
+
+    function testLateFirstBondKeepsFundingDeadlines() public {
+        uint256 paymentBlock = escrow.paymentBlockDeadline();
+        uint256 paymentTime = escrow.paymentDeadline();
+        uint256 collectionTime = escrow.collectionDeadline();
+        vm.roll(block.number + 20);
+        vm.warp(paymentTime - 1);
+        _bondExecutor();
+        assertEq(escrow.executionDeadline(), paymentBlock);
+        assertEq(escrow.paymentDeadline(), paymentTime);
+        assertEq(escrow.collectionDeadline(), collectionTime);
+    }
+
+    function testPaymentTimestampStopsNewCommitments() public {
+        vm.warp(escrow.paymentDeadline());
+        vm.prank(executor);
+        vm.expectRevert(RequestWindow.PaymentWindowClosed.selector);
+        escrow.bond(0, _sig(address(escrow), executor));
+    }
+
+    function testRefundWaitsForCollectionDeadlineWithoutAnyBond() public {
+        vm.warp(escrow.collectionDeadline() - 1);
+        vm.prank(deployer);
+        vm.expectRevert(RequestWindow.RedemptionWindowActive.selector);
+        escrow.cancelAndWithdraw();
+    }
+
+    function testRefundCannotRestartFundedRequest() public {
+        vm.warp(escrow.collectionDeadline());
+        vm.startPrank(deployer);
+        escrow.cancelAndWithdraw();
+        token.approve(address(escrow), REWARD_AMOUNT + PAYMENT_AMOUNT);
+        vm.expectRevert(RequestWindow.RequestAlreadyStarted.selector);
+        escrow.fund(REWARD_AMOUNT);
+        vm.stopPrank();
     }
 }

@@ -93,6 +93,7 @@ contract USDTCompatibilityTest is Test {
         assertEq(token.balanceOf(address(escrow)), escrowAmount);
 
         uint256 deployerBalanceBefore = token.balanceOf(deployer);
+        vm.warp(escrow.collectionDeadline());
         vm.prank(deployer);
         escrow.cancelAndWithdraw();
 

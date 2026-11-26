@@ -22,6 +22,10 @@ import {Verifier} from "./Verifier.sol";
 contract EscrowERC20 is EscrowBase, Verifier {
     using SafeERC20 for IERC20;
 
+    function _usesRequestWindow() internal pure override returns (bool) {
+        return true;
+    }
+
     // Custom errors
     error ZeroAddress();
     error ZeroCommitment();
@@ -115,6 +119,7 @@ contract EscrowERC20 is EscrowBase, Verifier {
         if (funded) revert AlreadyFunded();
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
         _validateGasAdvanceBudget(_currentRewardAmount);
+        _initializeRequestWindow();
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
@@ -182,6 +187,7 @@ contract EscrowERC20 is EscrowBase, Verifier {
     /// — are now circuit assertions.
     function _validateWitnessBlock(uint64 witnessBlockNumber) internal view returns (bytes32) {
         if (!funded) revert NotFunded();
+        _requireCollectionWindow();
         if (msg.sender != bondedExecutor || !is_bonded()) revert OnlyBondedExecutor();
         if (witnessBlockNumber >= block.number) revert WitnessBlockInFuture();
         if (block.number - witnessBlockNumber > MAX_WITNESS_LOOKBACK) revert WitnessBlockTooOld();

@@ -5,8 +5,9 @@ import "./BlockHeaderParser.sol";
 import "./MPTVerifier.sol";
 import "./ReceiptValidator.sol";
 import "./utils/ECDSA.sol";
+import {RequestWindow} from "./RequestWindow.sol";
 
-abstract contract EscrowBase {
+abstract contract EscrowBase is RequestWindow {
     // Custom errors
     error OnlyDeployer();
     error NotFunded();
@@ -61,7 +62,8 @@ abstract contract EscrowBase {
 
     // The following variables are dynamically adjusted when a bond or cancellation request is submitted.
     address public bondedExecutor;
-    /// @notice Last block at which the bonded executor may collect.
+    /// @notice Last authenticated payment block for a fixed-window ZK request.
+    /// Legacy plaintext escrows retain their original collection-lease meaning.
     ///
     /// A block number rather than a timestamp. Spec 12.7 requires it: the
     /// circuit reads the settlement block number from an authenticated header
@@ -74,7 +76,8 @@ abstract contract EscrowBase {
     /// A replay tag, spec 10.2. It enters the statement hash, so a proof
     /// generated under one lease cannot be presented under a later one. Unlike
     /// the rest of the bond state it survives expiry, which is what makes an
-    /// expired lease's proofs permanently unusable.
+    /// expired lease's proofs permanently unusable. Fixed-window ZK requests
+    /// never replace a collector while its redemption claim remains live.
     uint32 public bondAttempt;
     /// @notice Whether this funding cycle has already advanced reward funds.
     bool public gasAdvanceClaimed;
@@ -134,13 +137,20 @@ abstract contract EscrowBase {
 
     // checks if contract is currently bonded by verifying deadline
     function is_bonded() public view returns (bool) {
+        if (_hasRequestWindow()) {
+            // A known on-time payment remains this collector's claim through
+            // redemption. Passing its payment deadline never frees the lease.
+            return bondedExecutor != address(0) && block.timestamp < collectionDeadline();
+        }
         return executionDeadline > 0 && block.number <= executionDeadline;
     }
 
     // Internal helper to validate block header for proof verification
     function _validateBlockHeader(bytes calldata blockHeader, uint256 targetBlockNumber) internal view {
         if (!funded) revert NotFunded();
+        _requireCollectionWindow();
         if (msg.sender != bondedExecutor || !is_bonded()) revert OnlyBondedExecutor();
+        if (_hasRequestWindow() && targetBlockNumber > executionDeadline) revert PaymentWindowClosed();
         if (targetBlockNumber > block.number) revert TargetBlockInFuture();
         if (block.number - targetBlockNumber > MAX_BLOCK_LOOKBACK) revert TargetBlockTooOld();
         if (targetBlockNumber <= bondStartBlock) revert ProofBeforeBond();
@@ -164,8 +174,13 @@ abstract contract EscrowBase {
         bondStartBlock = 0;
     }
 
-    // Internal helper to clear an expired bond so a fresh enclave can bond.
+    // Legacy expiry frees a bond. Fixed-window requests preserve the original
+    // collector until redemption ends; a later bond cannot restart the clock.
     function _clearExpiredBond() internal {
+        if (_hasRequestWindow()) {
+            if (executionDeadline > 0 && block.timestamp >= collectionDeadline()) _tryResetBondData();
+            return;
+        }
         if (executionDeadline > 0 && block.number > executionDeadline) {
             _tryResetBondData();
         }
@@ -176,6 +191,7 @@ abstract contract EscrowBase {
     // is no node deposit; Nomad provisions executor gas outside the escrow.
     function _validateBond(uint256 gasAdvance, bytes calldata bondSig) internal view {
         if (!funded) revert NotFunded();
+        _requirePaymentWindow();
         if (cancellationRequest) revert CancellationRequested();
         if (is_bonded()) revert ExecutorAlreadyBonded();
         if (gasAdvance > 0 && gasAdvanceClaimed) revert GasAdvanceAlreadyClaimed();
@@ -190,7 +206,7 @@ abstract contract EscrowBase {
     // bond state, so each lease gets a distinct statement hash.
     function _setBondData() internal {
         bondedExecutor = msg.sender;
-        executionDeadline = block.number + BOND_DURATION_BLOCKS;
+        executionDeadline = _hasRequestWindow() ? paymentBlockDeadline() : block.number + BOND_DURATION_BLOCKS;
         bondStartBlock = block.number;
         bondAttempt += 1;
     }
@@ -205,7 +221,7 @@ abstract contract EscrowBase {
         if (maxGasAdvance > rewardAmount) revert GasAdvanceBudgetExceedsReward();
     }
 
-    // Locks the escrow to the calling EOA for about fifteen minutes and optionally releases
+    // Locks the escrow to the calling EOA and optionally releases
     // a capped part of the existing reward. Titan fronts the bundle; the EOA swaps
     // this advance when necessary, repays the builder, and retains collect() gas.
     // No separate ETH bond pot is funded by the sender.
@@ -246,6 +262,7 @@ abstract contract EscrowBase {
     function _validateWithdraw() internal view {
         if (!funded) revert NotFunded();
         if (msg.sender != deployerAddress) revert OnlyDeployer();
+        _requireRefundWindow();
     }
 
     // An advance has already left the escrow, so cancellation returns only the

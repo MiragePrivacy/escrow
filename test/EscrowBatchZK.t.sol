@@ -4,10 +4,13 @@ pragma solidity 0.8.30;
 import {Test} from "forge-std/Test.sol";
 import {EscrowBatch} from "../src/EscrowBatch.sol";
 import {EscrowBatchZK} from "../src/EscrowBatchZK.sol";
+import {RequestWindow} from "../src/RequestWindow.sol";
 import {BatchBondAuth} from "./helpers/BatchBondAuth.sol";
 import {BatchMockERC20} from "./EscrowBatch.t.sol";
 
 contract EscrowBatchZKTest is Test {
+    receive() external payable {}
+
     uint256 constant SIGNER_KEY = 123;
     EscrowBatchZK escrow;
     EscrowBatchZK.RowProof rowProof;
@@ -24,6 +27,9 @@ contract EscrowBatchZKTest is Test {
         asset = vm.parseJsonAddress(json, ".statement.rowPayoutAsset");
         amount = vm.parseJsonUint(json, ".statement.rowPayoutAmount");
         start = uint64(vm.parseJsonUint(json, ".statement.bondStartBlock"));
+        // The fixed payment cutoff is funding-relative, so this fixture funds
+        // at its original lease start rather than extending it through bid().
+        vm.roll(start);
         rowProof.rowIndex = uint32(vm.parseJsonUint(json, ".statement.rowIndex"));
         rowProof.witnessBlockNumber = uint64(vm.parseJsonUint(json, ".statement.witnessBlockNumber"));
         uint256[] memory proof = vm.parseJsonUintArray(json, ".proof");
@@ -173,10 +179,81 @@ contract EscrowBatchZKTest is Test {
         assertEq(escrow.claimable(collector, asset), amount + amount / 2);
     }
 
-    function testExpiredLeaseCannotCollect() public {
+    function testOnTimePaymentCanCollectDuringRedemption() public {
         _setup("test/fixtures/batch_row_proof.json", false);
         vm.roll(start + 76);
-        vm.expectRevert(EscrowBatchZK.BondBlockDeadlineExpired.selector);
+        _collect();
+        assertTrue(escrow.transferCompleted(1));
+    }
+
+    function testOneBidCanCollectRowsSeparatelyAcrossThePaymentCutoff() public {
+        _setup("test/fixtures/batch_row_proof.json", false);
+        uint256 deadline = escrow.collectionDeadline();
+        uint256 paymentBlock = escrow.paymentBlockDeadline();
+        _collect();
+        (uint256 remainingRows, uint256 expiry, uint256 originalStart) = escrow.bids(collector);
+        assertEq(remainingRows, 1);
+        assertEq(expiry, deadline);
+        assertEq(originalStart, start);
+
+        string memory json = vm.readFile("test/fixtures/native_proof.json");
+        rowProof.rowIndex = 0;
+        rowProof.witnessBlockNumber = uint64(vm.parseJsonUint(json, ".statement.witnessBlockNumber"));
+        uint256[] memory points = vm.parseJsonUintArray(json, ".proof");
+        uint256[] memory signals = vm.parseJsonUintArray(json, ".publicSignals");
+        for (uint256 i; i < 8; ++i) {
+            rowProof.proof[i] = points[i];
+        }
+        rowProof.signals = [signals[0], signals[1]];
+        vm.roll(start + 76);
+        vm.warp(escrow.paymentDeadline() + 1);
+        vm.setBlockhash(rowProof.witnessBlockNumber, vm.parseJsonBytes32(json, ".statement.witnessBlockHash"));
+        _collect();
+        assertFalse(escrow.funded());
+        assertTrue(escrow.transferCompleted(0));
+        assertTrue(escrow.transferCompleted(1));
+        assertEq(escrow.paymentBlockDeadline(), paymentBlock);
+        assertEq(escrow.collectionDeadline(), deadline);
+        (, expiry,) = escrow.bids(collector);
+        assertEq(expiry, 0);
+    }
+
+    function testPartialCollectionCannotFreeOrExtendRemainingRows() public {
+        _setup("test/fixtures/batch_row_proof.json", false);
+        _collect();
+        uint256 deadline = escrow.collectionDeadline();
+        vm.warp(escrow.paymentDeadline());
+        vm.expectRevert(EscrowBatch.BidNotExpired.selector);
+        escrow.expireBid(collector);
+        vm.expectRevert(RequestWindow.RedemptionWindowActive.selector);
+        escrow.cancelAndWithdraw();
+        uint256[] memory indexes = new uint256[](1);
+        indexes[0] = 0;
+        address another = address(0x1234);
+        bytes memory signature = BatchBondAuth.sign(vm, SIGNER_KEY + 1, address(escrow), another, indexes);
+        vm.prank(another);
+        vm.expectRevert(RequestWindow.PaymentWindowClosed.selector);
+        escrow.bid(indexes, 0, signature);
+        assertEq(escrow.transferBidder(0), collector);
+        assertEq(escrow.collectionDeadline(), deadline);
+    }
+
+    function testRefundAfterFixedWindowReleasesOnlyUnsettledRows() public {
+        _setup("test/fixtures/batch_row_proof.json", false);
+        _collect();
+        vm.warp(escrow.collectionDeadline());
+        escrow.cancelAndWithdraw();
+        assertFalse(escrow.funded());
+        assertTrue(escrow.transferCompleted(1));
+        assertFalse(escrow.transferCompleted(0));
+        assertEq(escrow.transferBidder(0), address(0));
+        assertEq(escrow.activeBidCount(), 0);
+    }
+
+    function testCollectionBlockWindowCannotBeExtended() public {
+        _setup("test/fixtures/batch_row_proof.json", false);
+        vm.roll(escrow.collectionBlockDeadline() + 1);
+        vm.expectRevert(RequestWindow.CollectionWindowClosed.selector);
         _collect();
     }
 

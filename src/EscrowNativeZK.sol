@@ -27,6 +27,9 @@ import {NativeVerifier} from "./NativeVerifier.sol";
 /// two relations have different constraint counts, so that does not hold yet.
 /// This is a release gate for mainnet, tracked in the circuits repository.
 contract EscrowNativeZK is EscrowBase, NativeVerifier {
+    function _usesRequestWindow() internal pure override returns (bool) {
+        return true;
+    }
     // Custom errors
     error ZeroCommitment();
     error IncorrectETHAmount();
@@ -106,6 +109,7 @@ contract EscrowNativeZK is EscrowBase, NativeVerifier {
         if (_currentRewardAmount > 0) {
             _validateGasAdvanceBudget(_currentRewardAmount);
             if (msg.value != _currentRewardAmount + _payoutAmount) revert IncorrectETHAmount();
+            _initializeRequestWindow();
             currentRewardAmount = _currentRewardAmount;
             originalRewardAmount = _currentRewardAmount;
             currentPaymentAmount = _payoutAmount;
@@ -121,6 +125,7 @@ contract EscrowNativeZK is EscrowBase, NativeVerifier {
         if (_currentRewardAmount == 0) revert ZeroRewardAmount();
         _validateGasAdvanceBudget(_currentRewardAmount);
         if (msg.value != _currentRewardAmount + payoutAmount) revert IncorrectETHAmount();
+        _initializeRequestWindow();
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
@@ -177,6 +182,7 @@ contract EscrowNativeZK is EscrowBase, NativeVerifier {
     /// then returns its hash.
     function _validateWitnessBlock(uint64 witnessBlockNumber) internal view returns (bytes32) {
         if (!funded) revert NotFunded();
+        _requireCollectionWindow();
         if (msg.sender != bondedExecutor || !is_bonded()) revert OnlyBondedExecutor();
         if (witnessBlockNumber >= block.number) revert WitnessBlockInFuture();
         if (block.number - witnessBlockNumber > MAX_WITNESS_LOOKBACK) revert WitnessBlockTooOld();

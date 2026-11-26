@@ -8,13 +8,14 @@ import "./BlockHeaderParser.sol";
 import "./MPTVerifier.sol";
 import "./ReceiptValidator.sol";
 import "./utils/ECDSA.sol";
+import {RequestWindow} from "./RequestWindow.sol";
 
 /// @title EscrowBatch
 /// @notice Multi-transfer escrow with first-come, signature-gated execution.
 /// Bidders commit to selected rows using a one-time blinded Nomad signer.
 /// Proven rows settle permanently, while unfinished rows remain reserved until
 /// the bid expires. Expired bids release only their unfinished rows.
-contract EscrowBatch {
+contract EscrowBatch is RequestWindow {
     using SafeERC20 for IERC20;
 
     // ============ Types ============
@@ -272,7 +273,8 @@ contract EscrowBatch {
     /// @notice Whether at least one bid is still inside its execution window.
     function is_bonded() public view returns (bool) {
         for (uint256 i = 0; i < bidders.length;) {
-            if (bids[bidders[i]].expiresAt >= block.timestamp) return true;
+            uint256 expiry = bids[bidders[i]].expiresAt;
+            if (_hasRequestWindow() ? expiry > block.timestamp : expiry >= block.timestamp) return true;
 
             unchecked {
                 ++i;
@@ -304,6 +306,7 @@ contract EscrowBatch {
     function cancelAndWithdraw() external nonReentrant {
         if (msg.sender != deployerAddress) revert OnlyDeployer();
         if (!funded) revert NotFunded();
+        _requireRefundWindow();
 
         cancellationRequest = true;
         _handleExpiredBids();
@@ -524,6 +527,7 @@ contract EscrowBatch {
             nativeOwed += _currentRewardAmount;
         }
         if (msg.value != nativeOwed) revert IncorrectNativeAmount();
+        _initializeRequestWindow();
 
         currentRewardAmount = _currentRewardAmount;
         originalRewardAmount = _currentRewardAmount;
@@ -567,6 +571,7 @@ contract EscrowBatch {
 
     function _validateBidRequirements(uint256[] calldata transferIndexes) internal view {
         if (!funded) revert NotFunded();
+        _requirePaymentWindow();
         if (cancellationRequest) revert CancellationRequested();
         if (transferIndexes.length == 0) revert EmptyBid();
         if (bids[msg.sender].expiresAt > 0) revert BidderHasActiveBid();
@@ -775,7 +780,10 @@ contract EscrowBatch {
 
     function _releaseExpiredBid(address bidder) internal returns (bool released) {
         Bid storage activeBid = bids[bidder];
-        if (activeBid.expiresAt == 0 || block.timestamp <= activeBid.expiresAt) {
+        if (activeBid.expiresAt == 0) {
+            return false;
+        }
+        if (_hasRequestWindow() ? block.timestamp < activeBid.expiresAt : block.timestamp <= activeBid.expiresAt) {
             return false;
         }
 
