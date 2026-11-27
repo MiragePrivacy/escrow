@@ -62,6 +62,7 @@ contract RequestWindowTest is Test {
         assertEq(unfunded.paymentDeadline(), 2_900);
         assertEq(unfunded.collectionDeadline(), 3_800);
         assertEq(unfunded.paymentBlockDeadline(), 275);
+        assertEq(unfunded.paymentStartBlock(), 100);
     }
 
     function testLateBondAndResumeCannotExtendTheClock() public {
@@ -72,6 +73,7 @@ contract RequestWindowTest is Test {
         _bond(collector);
         assertEq(escrow.executionDeadline(), 175);
         assertEq(escrow.bondStartBlock(), 150);
+        assertEq(escrow.paymentStartBlock(), 100);
         assertEq(escrow.paymentDeadline(), 1_900);
         assertEq(escrow.collectionDeadline(), 2_800);
     }

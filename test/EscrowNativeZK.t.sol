@@ -70,6 +70,9 @@ contract EscrowNativeZKTest is Test {
         payoutAsset = vm.parseJsonAddress(json, ".statement.rowPayoutAsset");
         payoutAmount = vm.parseJsonUint(json, ".statement.rowPayoutAmount");
 
+        // The fixture commits to the wire-format payment lower bound. Deploy at
+        // that height; the live bond may begin later after a reorg.
+        vm.roll(bondStartBlock);
         _deployAtFixtureAddress();
         _forceBondState();
     }
@@ -91,6 +94,18 @@ contract EscrowNativeZKTest is Test {
         uint256[2] memory got = escrow.statementSignals(witnessBlockNumber);
         assertEq(got[0], signals[0], "high limb differs from the circuit's");
         assertEq(got[1], signals[1], "low limb differs from the circuit's");
+    }
+
+    function test_CollectsAPaymentMadeBeforeTheCurrentBond() public {
+        // The pinned proof's private delivery block is at least eight blocks
+        // before the witness. Move only the bond to one block before the witness.
+        uint64 acquired = witnessBlockNumber - 1;
+        vm.store(address(escrow), bytes32(uint256(5)), bytes32(uint256(acquired)));
+        assertEq(escrow.bondStartBlock(), acquired);
+        assertEq(escrow.paymentStartBlock(), bondStartBlock);
+        vm.prank(collector);
+        escrow.collect(proof, signals, witnessBlockNumber);
+        assertFalse(escrow.funded());
     }
 
     /// A real native proof must settle the escrow and pay the collector in ETH.
@@ -185,8 +200,7 @@ contract EscrowNativeZKTest is Test {
         escrow.collect(proof, signals, witnessBlockNumber);
     }
 
-    /// Spec 12.7: the settlement must fall inside the lease, so a witness at or
-    /// before the bond start is refused.
+    /// The witness must still be later than the current bond.
     function test_RejectsAWitnessBeforeTheBond() public {
         vm.store(address(escrow), bytes32(uint256(5)), bytes32(uint256(witnessBlockNumber)));
         vm.prank(collector);
