@@ -4,6 +4,7 @@ pragma solidity 0.8.30;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./EscrowBase.sol";
+import {ZkPaymentWindow} from "./ZkPaymentWindow.sol";
 import {StatementHash} from "./StatementHash.sol";
 import {Verifier} from "./Verifier.sol";
 
@@ -19,7 +20,7 @@ import {Verifier} from "./Verifier.sol";
 ///
 /// Spec 15.1 requires the verifier be embedded rather than called, so escrows
 /// share no deployed contract; hence the inheritance.
-contract EscrowERC20 is EscrowBase, Verifier {
+contract EscrowERC20 is ZkPaymentWindow, EscrowBase, Verifier {
     using SafeERC20 for IERC20;
 
     function _usesRequestWindow() internal pure override returns (bool) {
@@ -214,7 +215,7 @@ contract EscrowERC20 is EscrowBase, Verifier {
                 rowIndex: ROW_INDEX,
                 intentCommitment: intentCommitment,
                 bondAttempt: bondAttempt,
-                bondStartBlock: uint64(bondStartBlock),
+                bondStartBlock: paymentStartBlock,
                 bondDeadline: uint64(executionDeadline),
                 bondedCollector: bondedExecutor,
                 rowPayoutAsset: payoutAsset,

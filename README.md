@@ -37,7 +37,7 @@ contain `(asset, amount, valueWeight, intentCommitment)` plus shared
 recipient. The inherited plaintext `collect` always reverts.
 
 Each statement binds its row index, commitment, principal payout, collector,
-lease attempt, start/deadline blocks, and witness block. Rewards remain in the
+lease attempt, payment block bounds, and witness block. Rewards remain in the
 existing separate asset-weighted accounting. Funding starts the fixed request
 windows described below. Clients and Nomad reject identical settlement rows; the circuit still
 relies on the existing policy against overlapping identical live intents.
@@ -69,6 +69,14 @@ immediately, including after the payment window, while the timestamp is before
 The original collector and row reservations remain protected during redemption;
 payment expiry never opens those claims to a replacement bidder. Separate
 collections of one bid keep its original deadlines and spend no new gas advance.
+
+On new ZK deployments, `paymentStartBlock()` returns the deployment block. The delivery must
+land strictly after that block and at or before `paymentBlockDeadline()`. The proof format
+calls its lower bound `bondStartBlock`. New escrows supply the deployment height for that
+field. Earlier deployed versions supply the reservation height. The single escrow's
+`bondStartBlock()` getter and the batch bid's `startBlock` still report when the reservation
+landed. Collection requires the current owner and a witness block strictly after that reservation.
+This lets the node prove its original payment if a reorg moves it ahead of the reservation.
 
 The circuit's `bondDeadline` remains the authenticated payment **block** cutoff.
 The existing circuit does not authenticate payment timestamps, so 15 minutes is

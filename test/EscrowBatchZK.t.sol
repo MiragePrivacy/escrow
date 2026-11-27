@@ -77,7 +77,9 @@ contract EscrowBatchZKTest is Test {
             vm.deal(address(this), amount);
             escrow.fund{value: amount}(amount);
         }
-        vm.roll(start);
+        // The proof's payment is at least eight blocks before its witness. Use
+        // a later bid to exercise separate payment and reservation boundaries.
+        vm.roll(rowProof.witnessBlockNumber - 1);
         uint256[] memory indexes = new uint256[](rows.length);
         for (uint256 i; i < rows.length; ++i) {
             indexes[i] = i;
@@ -85,6 +87,9 @@ contract EscrowBatchZKTest is Test {
         bytes memory signature = BatchBondAuth.sign(vm, SIGNER_KEY, target, collector, indexes);
         vm.prank(collector);
         escrow.bid(indexes, 0, signature);
+        (,, uint256 actualStart) = escrow.bids(collector);
+        assertEq(actualStart, rowProof.witnessBlockNumber - 1);
+        assertEq(escrow.paymentStartBlock(), start);
         vm.roll(rowProof.witnessBlockNumber + 1);
         vm.setBlockhash(rowProof.witnessBlockNumber, vm.parseJsonBytes32(json, ".statement.witnessBlockHash"));
     }
@@ -152,6 +157,15 @@ contract EscrowBatchZKTest is Test {
         assertFalse(escrow.transferCompleted(0));
     }
 
+    function testWitnessMustFollowTheActualBid() public {
+        _setup("test/fixtures/batch_row_proof.json", false);
+        (,, uint256 acquired) = escrow.bids(collector);
+        rowProof.witnessBlockNumber = uint64(acquired);
+        vm.expectRevert(EscrowBatch.ProofBeforeBid.selector);
+        _collect();
+        assertFalse(escrow.transferCompleted(1));
+    }
+
     function testBadProofLeavesRowsUnsettled() public {
         _setup("test/fixtures/batch_row_proof.json", false);
         rowProof.proof[0] ^= 1;
@@ -194,7 +208,7 @@ contract EscrowBatchZKTest is Test {
         (uint256 remainingRows, uint256 expiry, uint256 originalStart) = escrow.bids(collector);
         assertEq(remainingRows, 1);
         assertEq(expiry, deadline);
-        assertEq(originalStart, start);
+        assertEq(originalStart, rowProof.witnessBlockNumber - 1);
 
         string memory json = vm.readFile("test/fixtures/native_proof.json");
         rowProof.rowIndex = 0;

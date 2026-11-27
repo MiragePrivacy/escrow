@@ -2,6 +2,7 @@
 pragma solidity 0.8.30;
 
 import "./EscrowBase.sol";
+import {ZkPaymentWindow} from "./ZkPaymentWindow.sol";
 import {StatementHash} from "./StatementHash.sol";
 import {NativeVerifier} from "./NativeVerifier.sol";
 
@@ -26,7 +27,7 @@ import {NativeVerifier} from "./NativeVerifier.sol";
 /// proving time that identifies the asset kind splits the anonymity set. The
 /// two relations have different constraint counts, so that does not hold yet.
 /// This is a release gate for mainnet, tracked in the circuits repository.
-contract EscrowNativeZK is EscrowBase, NativeVerifier {
+contract EscrowNativeZK is ZkPaymentWindow, EscrowBase, NativeVerifier {
     function _usesRequestWindow() internal pure override returns (bool) {
         return true;
     }
@@ -209,7 +210,7 @@ contract EscrowNativeZK is EscrowBase, NativeVerifier {
                 rowIndex: ROW_INDEX,
                 intentCommitment: intentCommitment,
                 bondAttempt: bondAttempt,
-                bondStartBlock: uint64(bondStartBlock),
+                bondStartBlock: paymentStartBlock,
                 bondDeadline: uint64(executionDeadline),
                 bondedCollector: bondedExecutor,
                 rowPayoutAsset: payoutAsset,

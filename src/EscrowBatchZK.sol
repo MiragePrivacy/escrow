@@ -2,13 +2,14 @@
 pragma solidity 0.8.30;
 
 import {EscrowBatch} from "./EscrowBatch.sol";
+import {ZkPaymentWindow} from "./ZkPaymentWindow.sol";
 import {StatementHash} from "./StatementHash.sol";
 import {BatchVerifier} from "./BatchVerifier.sol";
 import {BatchNativeVerifier} from "./BatchNativeVerifier.sol";
 
 /// @notice Progressive batch settlement with one Groth16 proof per row.
 /// @dev Clients must reject overlapping identical settlement intents.
-contract EscrowBatchZK is EscrowBatch {
+contract EscrowBatchZK is ZkPaymentWindow, EscrowBatch {
     function _usesRequestWindow() internal pure override returns (bool) {
         return true;
     }
@@ -125,7 +126,6 @@ contract EscrowBatchZK is EscrowBatch {
     {
         if (rowIndex >= expectedTransfers.length) revert InvalidTransferIndex();
         address bidder = transferBidder[rowIndex];
-        Bid storage lease = bids[bidder];
         BatchTransfer storage row = expectedTransfers[rowIndex];
         return StatementHash.Context({
             instanceDomain: instanceDomain,
@@ -135,7 +135,7 @@ contract EscrowBatchZK is EscrowBatch {
             rowIndex: rowIndex,
             intentCommitment: intentCommitments[rowIndex],
             bondAttempt: bondAttempts[bidder],
-            bondStartBlock: uint64(lease.startBlock),
+            bondStartBlock: paymentStartBlock,
             bondDeadline: bondBlockDeadlines[bidder],
             bondedCollector: bidder,
             rowPayoutAsset: row.asset,
